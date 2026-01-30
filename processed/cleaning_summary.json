@@ -1,0 +1,344 @@
+[
+  {
+    "file": "352944080639365.csv",
+    "rows_raw": 385430,
+    "rows_dedup": 351460,
+    "dedup_removed": 33970,
+    "time_start_utc": "2019-10-09 05:45:38.843000+00:00",
+    "time_end_utc": "2019-10-18 13:24:21.809000+00:00",
+    "dt_median_s": 1.955,
+    "dt_p05_s": 0.035,
+    "dt_p95_s": 5.918,
+    "null_counts": {
+      "device_id": 0,
+      "device_model": 0,
+      "android_version": 0,
+      "battery_chemistry": 0,
+      "battery_capacity_mAh": 0,
+      "timestamp_ms": 0,
+      "is_charging": 0,
+      "battery_level_pct": 0,
+      "logger_package": 0,
+      "col09_unknown": 0,
+      "battery_temp_C": 0,
+      "battery_voltage_mV": 0,
+      "battery_current_mA": 0,
+      "network_type": 0,
+      "screen_on": 0,
+      "timestamp": 0
+    },
+    "ranges": {
+      "battery_level_pct": [
+        0.0,
+        100.0
+      ],
+      "battery_temp_C": [
+        21.7,
+        36.6
+      ],
+      "battery_voltage_mV": [
+        3142.0,
+        4313.0
+      ],
+      "battery_current_mA": [
+        0.0,
+        1879.0
+      ],
+      "col09_unknown": [
+        0.0,
+        0.0
+      ]
+    },
+    "value_counts": {
+      "network_type_top": {
+        "none": 187091,
+        "wi-fi": 164369
+      },
+      "screen_on": {
+        "False": 317685,
+        "True": 33775
+      },
+      "is_charging": {
+        "False": 301983,
+        "True": 49477
+      },
+      "logger_package": {
+        "com.zopper.batteryage": 351460
+      }
+    }
+  },
+  {
+    "file": "358057080902248.csv",
+    "rows_raw": 229630,
+    "rows_dedup": 216360,
+    "dedup_removed": 13270,
+    "time_start_utc": "2019-10-09 05:45:55.635000+00:00",
+    "time_end_utc": "2019-10-18 13:26:16.179000+00:00",
+    "dt_median_s": 1.975,
+    "dt_p05_s": 0.39,
+    "dt_p95_s": 5.698,
+    "null_counts": {
+      "device_id": 0,
+      "device_model": 19941,
+      "android_version": 19941,
+      "battery_chemistry": 0,
+      "battery_capacity_mAh": 0,
+      "timestamp_ms": 0,
+      "is_charging": 0,
+      "battery_level_pct": 0,
+      "logger_package": 0,
+      "col09_unknown": 0,
+      "battery_temp_C": 0,
+      "battery_voltage_mV": 0,
+      "battery_current_mA": 0,
+      "network_type": 0,
+      "screen_on": 0,
+      "timestamp": 0
+    },
+    "ranges": {
+      "battery_level_pct": [
+        0.0,
+        100.0
+      ],
+      "battery_temp_C": [
+        24.5,
+        36.7
+      ],
+      "battery_voltage_mV": [
+        3390.0,
+        4283.0
+      ],
+      "battery_current_mA": [
+        0.0,
+        1544.0
+      ],
+      "col09_unknown": [
+        0.0,
+        100.0
+      ]
+    },
+    "value_counts": {
+      "network_type_top": {
+        "wi-fi": 176709,
+        "none": 39651
+      },
+      "screen_on": {
+        "False": 149826,
+        "True": 66534
+      },
+      "is_charging": {
+        "False": 166466,
+        "True": 49894
+      },
+      "logger_package": {
+        "com.zopper.batteryage": 216360
+      }
+    }
+  },
+  {
+    "file": "866558034754119.csv",
+    "rows_raw": 85530,
+    "rows_dedup": 83740,
+    "dedup_removed": 1790,
+    "time_start_utc": "2019-10-09 05:28:45.694000+00:00",
+    "time_end_utc": "2019-10-18 17:15:20.103000+00:00",
+    "dt_median_s": 2.068,
+    "dt_p05_s": 0.31,
+    "dt_p95_s": 2.461,
+    "null_counts": {
+      "device_id": 0,
+      "device_model": 0,
+      "android_version": 0,
+      "battery_chemistry": 0,
+      "battery_capacity_mAh": 0,
+      "timestamp_ms": 0,
+      "is_charging": 0,
+      "battery_level_pct": 0,
+      "logger_package": 0,
+      "col09_unknown": 0,
+      "battery_temp_C": 0,
+      "battery_voltage_mV": 0,
+      "battery_current_mA": 0,
+      "network_type": 0,
+      "screen_on": 0,
+      "timestamp": 0
+    },
+    "ranges": {
+      "battery_level_pct": [
+        12.0,
+        100.0
+      ],
+      "battery_temp_C": [
+        24.0,
+        45.0
+      ],
+      "battery_voltage_mV": [
+        3552.0,
+        4367.0
+      ],
+      "battery_current_mA": [
+        0.0,
+        1428.0
+      ],
+      "col09_unknown": [
+        0.0,
+        121.0
+      ]
+    },
+    "value_counts": {
+      "network_type_top": {
+        "wi-fi": 82847,
+        "mobile": 754,
+        "none": 139
+      },
+      "screen_on": {
+        "False": 53634,
+        "True": 30106
+      },
+      "is_charging": {
+        "True": 63828,
+        "False": 19912
+      },
+      "logger_package": {
+        "com.zopper.batteryage": 83740
+      }
+    }
+  },
+  {
+    "file": "866817034014258.csv",
+    "rows_raw": 344020,
+    "rows_dedup": 318610,
+    "dedup_removed": 25410,
+    "time_start_utc": "2019-10-09 05:47:37.007000+00:00",
+    "time_end_utc": "2019-10-18 11:24:59.690000+00:00",
+    "dt_median_s": 1.817,
+    "dt_p05_s": 0.074,
+    "dt_p95_s": 3.375599999999977,
+    "null_counts": {
+      "device_id": 0,
+      "device_model": 6,
+      "android_version": 6,
+      "battery_chemistry": 0,
+      "battery_capacity_mAh": 0,
+      "timestamp_ms": 0,
+      "is_charging": 0,
+      "battery_level_pct": 0,
+      "logger_package": 0,
+      "col09_unknown": 0,
+      "battery_temp_C": 0,
+      "battery_voltage_mV": 0,
+      "battery_current_mA": 0,
+      "network_type": 0,
+      "screen_on": 0,
+      "timestamp": 0
+    },
+    "ranges": {
+      "battery_level_pct": [
+        1.0,
+        97.0
+      ],
+      "battery_temp_C": [
+        21.8,
+        39.9
+      ],
+      "battery_voltage_mV": [
+        3517.0,
+        4356.0
+      ],
+      "battery_current_mA": [
+        0.0,
+        1715.0
+      ],
+      "col09_unknown": [
+        0.0,
+        0.0
+      ]
+    },
+    "value_counts": {
+      "network_type_top": {
+        "mobile": 180592,
+        "wi-fi": 81417,
+        "none": 56601
+      },
+      "screen_on": {
+        "False": 272213,
+        "True": 46397
+      },
+      "is_charging": {
+        "False": 258080,
+        "True": 60530
+      },
+      "logger_package": {
+        "com.zopper.batteryage": 318610
+      }
+    }
+  },
+  {
+    "file": "867194030192184.csv",
+    "rows_raw": 286010,
+    "rows_dedup": 280850,
+    "dedup_removed": 5160,
+    "time_start_utc": "2019-10-09 05:45:49.472000+00:00",
+    "time_end_utc": "2019-10-18 18:31:37.987000+00:00",
+    "dt_median_s": 2.013,
+    "dt_p05_s": 0.024,
+    "dt_p95_s": 5.278,
+    "null_counts": {
+      "device_id": 0,
+      "device_model": 7,
+      "android_version": 7,
+      "battery_chemistry": 0,
+      "battery_capacity_mAh": 0,
+      "timestamp_ms": 0,
+      "is_charging": 0,
+      "battery_level_pct": 0,
+      "logger_package": 0,
+      "col09_unknown": 0,
+      "battery_temp_C": 0,
+      "battery_voltage_mV": 0,
+      "battery_current_mA": 0,
+      "network_type": 0,
+      "screen_on": 0,
+      "timestamp": 0
+    },
+    "ranges": {
+      "battery_level_pct": [
+        0.0,
+        100.0
+      ],
+      "battery_temp_C": [
+        23.0,
+        40.0
+      ],
+      "battery_voltage_mV": [
+        3503.0,
+        4396.0
+      ],
+      "battery_current_mA": [
+        0.0,
+        1968.0
+      ],
+      "col09_unknown": [
+        0.0,
+        0.0
+      ]
+    },
+    "value_counts": {
+      "network_type_top": {
+        "wi-fi": 233622,
+        "none": 47228
+      },
+      "screen_on": {
+        "False": 258216,
+        "True": 22634
+      },
+      "is_charging": {
+        "False": 257773,
+        "True": 23077
+      },
+      "logger_package": {
+        "com.zopper.batteryage": 280850
+      }
+    }
+  }
+]
