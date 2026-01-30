@@ -8,29 +8,24 @@
 
 #### 1.1 问题重述（Problem Restatement）
 
-智能手机电池的续航表现常常“同机不同天”：有时能用一整天，有时却在午饭前就耗尽。造成耗电差异的不只是“使用时长”，还包括屏幕点亮与亮度、处理器负载、网络连接（Wi‑Fi/蜂窝）、后台应用活动，以及环境温度等因素；同时，电池的使用年限、历史充电方式与老化过程也会改变可用容量与放电特性。由于电池耗尽后设备将进入关机/低功耗状态，且用户行为与系统负载无法被电池“反向调节”，因此我们可以在给定的使用工况输入下，把问题表述为对电池状态的连续时间预测与解释。
+Smartphone battery life can vary dramatically from day to day. Beyond the total duration of use, battery drain depends on a combination of screen activity, processor workload, network connectivity (Wi‑Fi vs. cellular), background applications, and environmental factors such as temperature. Long‑term battery aging further alters the effective capacity and discharge behavior.
 
-本题要求我们建立一个**连续时间**（continuous-time）的数学模型，用以描述锂离子电池的电量状态 \(SOC(t)\) 随时间变化，并在现实使用条件下预测剩余可用时间。基于题目要求与我们的数据条件，问题可分解为以下四个部分：
+The objective of this problem is to develop a **continuous‑time** mathematical model for a lithium‑ion smartphone battery that returns the **state of charge** \(SOC(t)\) over time under realistic usage conditions, and to use the model to produce actionable, testable predictions. After reviewing the problem statement, we formulate the task into the following sub‑problems:
 
-- **建立连续时间电池模型并量化不确定性**：构造可解释的 \(SOC(t)\) 微分方程（或方程组），并明确状态变量、参数、输入（屏幕/网络/充电等）与边界条件（如 \(0 \le SOC \le 1\)）。给出模型误差与不确定性来源，并定义可计算的度量指标。
-- **参数估计与模型验证（以主数据集为基准）**：使用 `Database/` 的秒级设备日志进行参数估计、校准与验证，检验模型能否再现实测电量轨迹，并在不同工况下保持稳定性。必要时利用 `Activation_Date_Phone.xlsx` 对设备老化程度进行分组或先验约束。
-- **time-to-empty 预测与驱动因素解释**：在不同初始电量与使用场景下，计算/近似电池耗尽时间；比较场景差异并识别导致快速耗电的关键驱动因素（如亮屏、网络类型切换、充电状态、温度变化等）。
-- **敏感性分析与建议输出**：分析参数变化、建模假设与使用波动对预测结果的影响，给出对用户与操作系统的可操作节能建议（如降低亮度、限制后台任务、选择网络模式等），并讨论模型对电池老化与其他设备的可扩展性。
+- **MODEL**:  
+  Construct a continuous‑time equation (or system of equations) that describes battery state evolution \(SOC(t)\) using physically interpretable mechanisms (e.g., energy balance / equivalent‑circuit reasoning), and define all state variables and parameters.
 
-为满足题目对“连续时间与机理解释”的要求，我们将以能量守恒/等效电路/可解释负载分解为基础建立微分方程，并用数据进行参数估计与验证，而不是仅做离散曲线拟合或黑箱回归。
+- **PREDICT**:  
+  Use the model to estimate **time‑to‑empty** under different initial charge levels and usage scenarios; compare predictions against observed or plausible behavior.
 
-**本次建模的主数据集**来自 `Database/`：每个 CSV 以设备标识命名，记录秒级采样的运行状态与电池相关变量（时间戳、电量百分比、温度、电压、电流、网络类型、是否亮屏、是否充电、前台应用等）。
+- **DIAGNOSE**:  
+  Explain why different scenarios produce different drain rates, and identify the dominant drivers of rapid battery depletion.
 
-#### 1.2 迭代工作流与“补丁式修正”原则（本稿的基准约定）
+- **SENSITIVITY & UNCERTAINTY**:  
+  Evaluate how predictions change under variations in assumptions, parameter values, and fluctuations in usage patterns; quantify uncertainty and identify failure modes.
 
-我们将采用“**基准模型 → 逐步加修正项**”的方式推进写作与建模：
+- **RECOMMEND**:  
+  Translate model insights into practical guidance for users and potential power‑management strategies for an operating system; discuss how battery aging affects outcomes and how the framework can generalize to other portable devices.
 
-- **基准模型（v0）**：先建立一个最简、可解释、连续时间的 SOC 方程，确保能在主数据集上跑通并得到合理的 time-to-empty 预测。
-- **补丁式修正（v1/v2/…）**：当发现系统性偏差（例如不同温度下误差结构不同、亮屏/网络切换导致瞬态误差等），通过加入修正项/耦合方程（如温度修正、模式切换项、老化项）进行迭代。
-
-为保证“补丁”不会让报告前后自相矛盾，我们约定：
-
-- **状态变量定义不轻易改变**：例如 \(SOC(t)\) 的定义、单位、取值范围、以及与数据中“电量百分比”的映射关系。一旦需要改变，必须在模型定义处统一更新，并重新解释所有后续公式与指标。
-- **每个补丁必须回答三件事**：新增了什么变量/参数？对应的物理意义是什么？在数据上如何估计/验证？
-- **可比性**：保留基准模型的结果作为对照，以便量化每次补丁带来的改进（误差、解释力、稳定性）。
+To support parameter estimation and validation, we will use the provided primary dataset `MCM_2026_A/Database/`, which contains per‑device, seconds‑level logs (timestamped battery and context variables such as battery percentage, temperature, voltage, current, network type, screen state, charging state, and foreground app). The accompanying file `Activation_Date_Phone.xlsx` provides device activation dates that can be used to stratify or proxy battery aging.
 
