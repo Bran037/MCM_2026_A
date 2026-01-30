@@ -1,0 +1,2 @@
+n,R2_in_sample,RMSE_in_sample,durbin_watson,ljung_box_pvalue_lag20,jarque_bera_pvalue
+15335,0.1319635743158828,0.5510129838240377,0.26677436847500025,0.0,0.0

@@ -10,6 +10,11 @@ OUT_DIR.mkdir(exist_ok=True)
 
 clean_files = sorted(IN_DIR.glob('*_clean.csv'))
 
+# Smoothing controls (post 1-min resample)
+RESAMPLE_FREQ = '1min'
+INTERP_LIMIT = 5          # max consecutive minutes to fill; keeps long gaps visible
+SMOOTH_WINDOW_MIN = 11    # rolling window size in minutes (odd recommended)
+
 
 def resample_1min(df: pd.DataFrame) -> pd.DataFrame:
     d = df.copy()
@@ -34,7 +39,40 @@ def resample_1min(df: pd.DataFrame) -> pd.DataFrame:
         'screen_on': 'max',
     }
 
-    out = d.resample('1min').agg(agg)
+    out = d.resample(RESAMPLE_FREQ).agg(agg)
+    return out
+
+
+def smooth_1min(df1m: pd.DataFrame) -> pd.DataFrame:
+    """
+    Make plots visually smoother without distorting long gaps:
+    - limited time interpolation for short missing spans
+    - rolling smoothing (mean for slow signals, median for spiky signals)
+    """
+    out = df1m.copy()
+
+    # limited interpolation on numeric series only
+    num_cols = ['battery_level_pct', 'battery_temp_C', 'battery_voltage_mV', 'battery_current_mA', 'col09_unknown']
+    for c in num_cols:
+        if c in out.columns:
+            out[c] = out[c].interpolate(method='time', limit=INTERP_LIMIT)
+
+    # rolling smoothing
+    w = int(SMOOTH_WINDOW_MIN)
+    if w < 1:
+        return out
+
+    # Slow-moving signals: rolling mean (helps SOC stair-steps after resample)
+    for c in ['battery_level_pct', 'battery_temp_C', 'battery_voltage_mV', 'col09_unknown']:
+        if c in out.columns:
+            out[c] = out[c].rolling(window=w, center=True, min_periods=max(1, w // 3)).mean()
+
+    # Spiky signal: rolling median for current
+    if 'battery_current_mA' in out.columns:
+        out['battery_current_mA'] = out['battery_current_mA'].rolling(
+            window=w, center=True, min_periods=max(1, w // 3)
+        ).median()
+
     return out
 
 
@@ -72,7 +110,10 @@ def plot_device(df1m: pd.DataFrame, device_id: str) -> Path:
         ax.fill_between(t, y0, y1, where=scr.values, color='tab:blue', alpha=0.05, step='pre')
         ax.set_ylim(y0, y1)
 
-    fig.suptitle(f'Device {device_id}: 1-min resampled signals (green=charging, blue=screen-on)')
+    fig.suptitle(
+        f'Device {device_id}: {RESAMPLE_FREQ} resample + smooth({SMOOTH_WINDOW_MIN}min) '
+        f'(green=charging, blue=screen-on)'
+    )
     axes[-1].set_xlabel('Time (UTC)')
     fig.tight_layout(rect=[0, 0.03, 1, 0.95])
 
@@ -86,7 +127,7 @@ def plot_device(df1m: pd.DataFrame, device_id: str) -> Path:
 for f in clean_files:
     df = pd.read_csv(f)
     device_id = str(df['device_id'].iloc[0]) if 'device_id' in df.columns else f.stem.replace('_clean','')
-    df1m = resample_1min(df)
+    df1m = smooth_1min(resample_1min(df))
     out = plot_device(df1m, device_id)
     print('wrote', out)
 
@@ -95,11 +136,11 @@ fig, ax = plt.subplots(1, 1, figsize=(12, 5))
 for f in clean_files:
     df = pd.read_csv(f)
     device_id = str(df['device_id'].iloc[0])
-    df1m = resample_1min(df)
+    df1m = smooth_1min(resample_1min(df))
     soc = df1m['battery_level_pct']
     ax.plot(soc.index, soc.values, lw=1, label=device_id)
 
-ax.set_title('SOC(%) comparison across devices (1-min resampled, UTC)')
+ax.set_title(f'SOC(%) comparison across devices ({RESAMPLE_FREQ} + smooth({SMOOTH_WINDOW_MIN}min), UTC)')
 ax.set_ylabel('SOC(%)')
 ax.grid(True, alpha=0.3)
 ax.legend(ncol=2, fontsize=8)
