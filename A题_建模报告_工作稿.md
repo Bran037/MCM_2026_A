@@ -119,7 +119,7 @@ SOC_0=\int_{t_0}^{t_0+\tau_{\\text{empty}}}\frac{\eta\, I_{\\text{d}}(t)}{C_{\\t
 我们用三个无量纲修正系数表示亮屏、网络、温度对放电强度的相对影响：
 
 \[
-\dot{SOC}(t)= -\frac{\eta}{C_{\text{eff}}}\, I_0(t)\cdot k_{\text{scr}}\!\big(u_{\text{scr}}(t)\big)\cdot k_{\text{net}}\!\big(u_{\text{net}}(t)\big)\cdot k_T\!\big(T(t)\big),
+\dot{SOC}(t)= -\frac{\eta}{C_{\text{eff}}}\, I_0(t)\cdot k_{\text{scr}}\!\big(u_{\text{scr}}(t),b(t)\big)\cdot k_{\text{net}}\!\big(u_{\text{net}}(t)\big)\cdot k_T\!\big(T(t)\big),
 \]
 
 其中 \(I_0(t)\ge 0\) 为“基准放电强度”（可理解为在参考工况下的等效放电电流），三类装饰项分别定义如下。
@@ -266,3 +266,39 @@ k_T(T)=
 \]
 
 其中 \(\mathbf{1}\{\cdot\}\) 为指示函数。该形式对应乘性修正系数的对数线性化，可直接用最小二乘或稳健回归估计参数，并用于检验“温度近似线性还是指数更合适”。
+
+#### 3.3 相对独立性（乘性可分）与误差界
+
+前述模型采用“乘性修正系数”的结构
+\(\,k_{\text{scr}}\cdot k_{\text{net}}\cdot k_T\,\)，其隐含含义是：不同影响因素对放电强度的作用在一阶近似下可以视为**可分离（相对独立）**，即“屏幕/网络/温度”分别通过各自通道改变能耗水平，而不会产生显著的交互叠加误差。下面给出一种可用于论文表述且可由数据检验的“相对独立性”构造。
+
+**引理 2（交互项的相对独立性与一阶误差界）**  
+设真实的放电率 \(r(t)\equiv-\dot{SOC}(t)\) 具有如下更一般形式：
+
+\[
+r(t)=\frac{\eta}{C_{\text{eff}}}\,I_0(t)\cdot k_{\text{scr}}\!\big(u_{\text{scr}}(t),b(t)\big)\cdot k_{\text{net}}\!\big(u_{\text{net}}(t)\big)\cdot k_T\!\big(T(t)\big)\cdot\big(1+\varepsilon_{\text{int}}(t)\big),
+\]
+
+其中 \(\varepsilon_{\text{int}}(t)\) 表示未显式建模的“交互/叠加效应”（例如：高温下网络模块的额外散热导致功耗略不同、亮屏下基带活动更频繁等）。若存在常数 \(\bar\varepsilon\in(0,1)\) 使得
+\(|\varepsilon_{\text{int}}(t)|\le \bar\varepsilon\) 对所有分析时刻成立，则采用忽略交互项的乘性可分模型所造成的相对误差满足
+
+\[
+\left|\frac{r_{\text{true}}(t)-r_{\text{sep}}(t)}{r_{\text{sep}}(t)}\right|
+=|\varepsilon_{\text{int}}(t)|
+\le \bar\varepsilon,
+\]
+
+即交互效应若在量级上较小，则其对放电率（以及由积分得到的 \(SOC(t)\) 与 \(\tau_{\text{empty}}\)）的误差贡献可控并可忽略到一阶。
+
+进一步，对上式取对数并用 \(\log(1+x)\approx x\)（当 \(|x|\ll 1\)）可得
+
+\[
+\log r(t)=\log\!\left(\frac{\eta}{C_{\text{eff}}}I_0(t)\right)+\log k_{\text{scr}}+\log k_{\text{net}}+\log k_T+\underbrace{\log\!\big(1+\varepsilon_{\text{int}}(t)\big)}_{\approx\,\varepsilon_{\text{int}}(t)},
+\]
+
+即在对数域中，“相对独立性”对应于**可加分解**；交互项则表现为一个小残差项，可被噪声/未观测因素吸收。
+
+**可检验的独立性判据（用于数据验证）**  
+在参数估计中，可在对数回归模型中显式加入若干交互项（例如 \(u_{\text{scr}}\times \mathbf{1}\{\text{mobile}\}\)、\(u_{\text{scr}}\times (T-T_{\text{ref}})\)、\(\mathbf{1}\{\text{mobile}\}\times (T-T_{\text{ref}})\) 等）。若这些交互项系数统计上不显著、或加入后拟合优度提升极小（且不改变主效应符号/量级），则可认为“乘性可分（相对独立）”假设在本问题尺度下成立。
+
+此外，由于本数据集中未直接记录亮度 \(b(t)\)，在数据验证阶段可将其视为常数并吸收进截距与亮屏主效应系数，从而不影响对“独立性/交互项”的检验逻辑。
