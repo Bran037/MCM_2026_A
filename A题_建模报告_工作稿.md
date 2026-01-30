@@ -45,6 +45,7 @@
 | \(V(t)\) | 电池端电压 | mV | 日志列 `battery_voltage_mV` |
 | \(T(t)\) | 电池温度 | ℃ | 日志列 `battery_temp_C` |
 | \(u_{\\text{scr}}(t)\) | 亮屏指示变量 | \(\{0,1\}\) | 日志列 `screen_on`（True/False） |
+| \(b(t)\) | 屏幕亮度（归一化） | \([0,1]\) | 建模变量；数据验证阶段可视为常数 \(b(t)\equiv b_0\) |
 | \(u_{\\text{chg}}(t)\) | 充电指示变量 | \(\{0,1\}\) | 日志列 `is_charging`（True/False） |
 | \(u_{\\text{net}}(t)\) | 网络模式 | {wi‑fi, mobile, none, …} | 日志列 `network_type` |
 | \(a(t)\) | 前台应用（或活动标识） | 字符串 | 日志列 `foreground_app`（用于行为分段/负载代理） |
@@ -53,6 +54,9 @@
 | \(I_{\\text{net}}(t)\) | 电池端净电流（净放电为正） | mA | 连续时间模型输入量（由负载与充电共同决定） |
 | \(I_{\\text{d}}(t)\) | 纯放电电流（放电为正） | mA | 纯放电工况下的 \(I_{\\text{net}}(t)\)（满足 \(I_{\\text{d}}(t)\\ge 0\)） |
 | \(\eta(t)\) | 库伦效率（充/放电效率） | \((0,1]\) | 可取常数或分段常数 |
+| \(\Theta(t)\) | 绝对温度 | K | \(\Theta(t)=T(t)+273.15\) |
+| \(T_{\min},T_{\max}\) | 舒适工作温度范围的下/上界 | ℃ | 待设定/待拟合（用于分段温度修正） |
+| \(k_T(T)\) | 温度修正系数（乘性，影响放电速度） | \(\mathbb{R}_+\) | 工作温度内近似为 1，范围外指数惩罚 |
 
 > 注：随着后续模型扩展（如引入温度修正项、老化参数、负载分解项等），本表将同步增补新符号以保持全文一致。
 
@@ -120,19 +124,22 @@ SOC_0=\int_{t_0}^{t_0+\tau_{\\text{empty}}}\frac{\eta\, I_{\\text{d}}(t)}{C_{\\t
 
 其中 \(I_0(t)\ge 0\) 为“基准放电强度”（可理解为在参考工况下的等效放电电流），三类装饰项分别定义如下。
 
-**（1）亮屏修正：\(k_{\text{scr}}\)**  
-不显式考虑亮度，将亮屏对放电的影响用两档系数表示：
+**（1）亮屏—亮度修正：\(k_{\text{scr}}\)**  
+在机理建模中，“息屏”与“亮屏”属于两种不同工作状态：亮屏会激活显示面板驱动、背光/发光与刷新链路等固定功耗，因此从息屏到亮屏应存在**不连续跳变**。在亮屏状态内部，亮度与显示功耗常用**线性（仿射）**近似建模。为同时体现“亮度连续、开关不连续”，我们定义亮度 \(b(t)\in[0,1]\)（0=最低亮度，1=最高亮度），并采用分段函数：
 
 \[
-k_{\text{scr}}(u_{\text{scr}})=
+k_{\text{scr}}\!\big(u_{\text{scr}},b\big)=
 \begin{cases}
-1, & u_{\text{scr}}=0\ (\text{息屏})\\
-\alpha_{\text{scr}}, & u_{\text{scr}}=1\ (\text{亮屏})
+1, & u_{\text{scr}}=0\ (\text{息屏}),\\
+1+\delta_{\text{scr}}+\beta_{\text{scr}}\,b, & u_{\text{scr}}=1\ (\text{亮屏}),
 \end{cases}
-\qquad (\alpha_{\text{scr}}>1).
+\qquad (\delta_{\text{scr}}>0,\ \beta_{\text{scr}}\ge 0).
 \]
 
-在本数据集验证阶段，我们可将“亮度”视为固定，从而 \(\alpha_{\text{scr}}\) 吸收了平均亮度与屏幕相关子负载的综合效应；后续若要引入亮度，只需将 \(\alpha_{\text{scr}}\) 替换为亮度的函数（例如线性或分段线性）。
+其中 \(\delta_{\text{scr}}\) 刻画“息屏→亮屏”的固定跳变能耗，\(\beta_{\text{scr}}\) 刻画亮度的线性增量效应。该模型天然满足不连续性：即使取 \(b=0\)（最低亮度），仍有 \(k_{\text{scr}}(1,0)=1+\delta_{\text{scr}}>1\neq k_{\text{scr}}(0,\cdot)=1\)。
+
+在数据验证阶段，若将亮度近似视为固定 \(b(t)\equiv b_0\)，则亮屏段系数退化为常数
+\(\alpha_{\text{scr}}=1+\delta_{\text{scr}}+\beta_{\text{scr}}b_0\)，从而回到“息屏/亮屏两档系数”的简化形式。
 
 **（2）网络修正：\(k_{\text{net}}\)**  
 将网络模式分为三类（无网络/无线网络/蜂窝网络），用分段常数描述其相对能耗差异：
@@ -148,21 +155,108 @@ k_{\text{net}}(u_{\text{net}})=
 \]
 
 **（3）温度修正：\(k_T\)**  
-温度对放电速度的影响可先用“线性近似”与“指数近似”两类候选形式，并通过数据选择更合适者：
+温度项我们采用“**存在舒适工作温度范围，范围外指数级惩罚**”的建模思路：在舒适范围内温度对放电速度的影响极弱（可近似为 1 或极小线性项）；当温度过低或过高时，电化学动力学与副反应对性能的影响显著增强，可用指数型关系描述。
 
-- 线性近似：
+为避免摄氏度带来的非线性歧义，先定义绝对温度 \(\Theta(t)=T(t)+273.15\)（单位 K），并取参考温度 \(\Theta_{\text{ref}}\)（对应 \(T_{\text{ref}}\)）。
 
-\[
-k_T(T)=1+\beta_T\,(T-T_{\text{ref}}),
-\]
-
-- 指数近似（对数线性）：
+**标准温度方程（Arrhenius 形式）**  
+在电化学动力学中，许多“速率常数/扩散系数/界面反应速率”等量对温度的基本依赖可写为
 
 \[
-k_T(T)=\exp\big(\gamma_T\,(T-T_{\text{ref}})\big).
+k(\Theta)=A\exp\!\left(-\frac{E_a}{R\Theta}\right),
 \]
 
-上述两种形式都满足 \(k_T(T_{\text{ref}})=1\)。在温度波动不大的区间内，指数形式的一阶展开与线性形式等价，因此两者的优劣可由拟合稳定性与外推表现决定。
+其中 \(E_a\) 为激活能，\(R\) 为气体常数。用参考温度消去常数 \(A\) 可得比值形式：
+
+\[
+\frac{k(\Theta)}{k(\Theta_{\text{ref}})}
+=\exp\!\left(-\frac{E_a}{R}\left(\frac{1}{\Theta}-\frac{1}{\Theta_{\text{ref}}}\right)\right).
+\]
+
+**由 Arrhenius 推向“可建模温度修正”的推导**  
+我们用两个最常见、且能直接落到放电速度上的通道来连接温度与 \(\dot{SOC}(t)\)：
+
+1) **低温侧：内阻/极化随温度上升而下降（低温显著恶化）**  
+在等效电路视角下，端电压可写为
+
+\[
+V(t)\approx OCV\!\big(SOC(t)\big)-I(t)\,R_{\text{int}}(\Theta)-V_{\text{pol}}(t),
+\]
+
+其中 \(R_{\text{int}}\)（含欧姆内阻与电荷转移阻抗等）随温度变化显著。若把界面反应“越快则阻抗越小”抽象为 \(R_{\text{int}}(\Theta)\propto 1/k(\Theta)\)，则
+
+\[
+\frac{R_{\text{int}}(\Theta)}{R_{\text{int}}(\Theta_{\text{ref}})}
+=\exp\!\left(\frac{E_{a,1}}{R}\left(\frac{1}{\Theta}-\frac{1}{\Theta_{\text{ref}}}\right)\right),
+\]
+
+即温度越低（\(\Theta\) 越小），\(R_{\text{int}}\) 越大。
+
+当以“到达截止电压 \(V_{\min}\)”定义放电终点时，恒流近似 \(I(t)\equiv I_0\) 下终止 SOC 满足
+
+\[
+OCV\!\big(SOC_{\text{end}}(\Theta)\big)\approx V_{\min}+I_0\,R_{\text{int}}(\Theta).
+\]
+
+在参考温度附近对 \(OCV(\cdot)\) 做一阶线性化（记 \(g=\frac{d\,OCV}{d\,SOC}>0\)）：
+
+\[
+SOC_{\text{end}}(\Theta)\approx SOC_{\text{end}}(\Theta_{\text{ref}})+\frac{I_0}{g}\Big(R_{\text{int}}(\Theta)-R_{\text{int}}(\Theta_{\text{ref}})\Big).
+\]
+
+于是“可用 SOC 窗口” \(\Delta SOC_{\text{use}}(\Theta)=SOC_0-SOC_{\text{end}}(\Theta)\) 随 \(R_{\text{int}}(\Theta)\) 增大而缩小。等价地，我们可将其吸收到“有效容量因子” \(g_T(\Theta)\in(0,1]\)：
+
+\[
+C_{\text{eff}}(\Theta)=C_{\text{eff}}\cdot g_T(\Theta),
+\qquad
+g_T(\Theta)=\frac{\Delta SOC_{\text{use}}(\Theta)}{\Delta SOC_{\text{use}}(\Theta_{\text{ref}})}.
+\]
+
+代回最简放电骨架
+
+\[
+\dot{SOC}(t)= -\frac{\eta\, I_0(t)}{C_{\text{eff}}(\Theta(t))},
+\]
+
+得到温度乘性修正系数
+
+\[
+k_T(\Theta)=\frac{C_{\text{eff}}}{C_{\text{eff}}(\Theta)}=\frac{1}{g_T(\Theta)}.
+\]
+
+当温度偏离不大时，\(g_T(\Theta)\) 可近似线性；当偏离显著、且 \(R_{\text{int}}(\Theta)\) 近似 Arrhenius 时，\(k_T(\Theta)\) 将呈指数型增长（尤其在低温侧）。
+
+2) **高温侧：副反应/寄生电流随温度上升而上升（高温惩罚）**  
+把高温导致的“额外不可用电量消耗”抽象为寄生电流 \(I_p(\Theta)\ge 0\)，常见的机理建模同样采用 Arrhenius：
+
+\[
+I_p(\Theta)=I_{p,\text{ref}}\exp\!\left(-\frac{E_{a,2}}{R}\left(\frac{1}{\Theta}-\frac{1}{\Theta_{\text{ref}}}\right)\right),
+\]
+
+其随温度上升而增大。于是净放电强度可写为 \(I_{\text{net}}=I_0+I_p(\Theta)\)，对应的放电速度乘子为
+
+\[
+k_{T,\text{high}}(\Theta)=\frac{I_0+I_p(\Theta)}{I_0}=1+\frac{I_p(\Theta)}{I_0},
+\]
+
+在高温侧给出“随温度上升加速”的惩罚项。
+
+**最终可建模方程：工作温度窗 + 范围外指数惩罚（U 形）**  
+将低温侧（内阻/可用容量）与高温侧（寄生消耗）合并，我们采用分段乘性温度系数（在舒适区取 1）：
+
+\[
+k_T(T)=
+\begin{cases}
+\exp\!\Big(\gamma_{\text{low}}\big(\frac{1}{\Theta}-\frac{1}{\Theta_{\min}}\big)\Big), & \Theta<\Theta_{\min},\\[6pt]
+1+\beta_T\,(T-T_{\text{opt}}), & \Theta_{\min}\le \Theta\le \Theta_{\max},\\[6pt]
+\exp\!\Big(\gamma_{\text{high}}\big(\frac{1}{\Theta_{\max}}-\frac{1}{\Theta}\big)\Big), & \Theta>\Theta_{\max},
+\end{cases}
+\qquad \Theta=T+273.15,
+\]
+
+其中 \(\gamma_{\text{low}},\gamma_{\text{high}}>0\)。若认为舒适区内影响可忽略，则取 \(\beta_T\approx 0\)，从而 \(k_T\) 在 \([\Theta_{\min},\Theta_{\max}]\) 内近似为 1，并在两侧随温度偏离呈指数上升；对应“放电效率”可定义为 \(\eta_T(T)=1/k_T(T)\)，其形状为以舒适区为顶的“U 形（或倒 U）窗口”。
+
+在数据验证阶段，由于现有温度观测多落在常温附近，可将 \(\beta_T\) 视为极小并优先用数据估计 \(\gamma_{\text{low}},\gamma_{\text{high}}\) 是否显著；若温度范围不足以识别两侧指数，则可退化为舒适区内的弱线性近似。
 
 **用于数据验证的等价回归形式**  
 由于系统电量往往以百分比离散显示，直接对秒级 \(SOC(t)\) 求导会引入量化噪声。实践中可先对 \(SOC\) 做按分钟重采样，并用多分钟差分近似 \(\dot{SOC}(t)\)，再在放电段上拟合系数。例如，对 \(r(t)\equiv -\dot{SOC}(t)\)（单位 1/h）取对数可得到便于估计的线性回归：
