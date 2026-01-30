@@ -1,31 +1,84 @@
-## 2026 MCM A 题：智能手机电池耗电建模（工作稿）
+## 2026 MCM A 题：智能手机电池耗电建模
 
-> 本文档为**边写边做**的工作稿：先给出可运行、可解释的基准模型与基准结论，再通过“修正项/修正方程”的方式逐步补丁迭代。  
-> **主数据集**：`Database/` 文件夹内的设备日志（以设备 IMEI 命名的 CSV）与 `Activation_Date_Phone.xlsx`。  
-> 题面来源：`2026_MCM_Problem_A.pdf`（本地：`C:\Regular\2026MCM\2026_MCM_Problem_A.pdf`）。
+### 1 引言（Introduction）
 
-### 1 引言
+#### 1.1 背景介绍
 
-#### 1.1 问题重述（Problem Restatement）
+智能手机已成为现代生活的高频基础设施，但其续航表现往往难以预测：同一部手机在不同日期可能出现显著不同的耗电速度。除“使用时长”外，屏幕亮度与点亮状态、处理器负载、网络连接（Wi‑Fi/蜂窝）、后台应用活动、定位与传感器，以及环境温度等因素都会改变能耗水平。同时，电池的老化与历史充电方式会使有效容量与放电特性随时间变化。
 
-Smartphone battery life can vary dramatically from day to day. Beyond the total duration of use, battery drain depends on a combination of screen activity, processor workload, network connectivity (Wi‑Fi vs. cellular), background applications, and environmental factors such as temperature. Long‑term battery aging further alters the effective capacity and discharge behavior.
+（后续内容留白）
 
-The objective of this problem is to develop a **continuous‑time** mathematical model for a lithium‑ion smartphone battery that returns the **state of charge** \(SOC(t)\) over time under realistic usage conditions, and to use the model to produce actionable, testable predictions. After reviewing the problem statement, we formulate the task into the following sub‑problems:
+#### 1.2 问题重述（Problem Restatement）
 
-- **MODEL**:  
-  Construct a continuous‑time equation (or system of equations) that describes battery state evolution \(SOC(t)\) using physically interpretable mechanisms (e.g., energy balance / equivalent‑circuit reasoning), and define all state variables and parameters.
+本题要求建立一个**连续时间**的数学模型，以描述锂离子电池的**电量状态** \(SOC(t)\) 随时间的演化，并据此在现实使用条件下产生可验证的预测与可操作的建议。综合题意，可将任务表述为以下子问题：
 
-- **PREDICT**:  
-  Use the model to estimate **time‑to‑empty** under different initial charge levels and usage scenarios; compare predictions against observed or plausible behavior.
+- **建模（MODEL）**：  
+  构建连续时间方程（或方程组）来刻画 \(SOC(t)\) 的变化规律；模型应具有可解释的物理/机理基础（如能量守恒或等效电路思想），并清晰定义所有状态变量与参数。
 
-- **DIAGNOSE**:  
-  Explain why different scenarios produce different drain rates, and identify the dominant drivers of rapid battery depletion.
+- **预测（PREDICT）**：  
+  在不同初始电量与使用场景下，估计“距离耗尽时间”（time‑to‑empty），并与观测或合理行为进行对比验证。
 
-- **SENSITIVITY & UNCERTAINTY**:  
-  Evaluate how predictions change under variations in assumptions, parameter values, and fluctuations in usage patterns; quantify uncertainty and identify failure modes.
+- **诊断（DIAGNOSE）**：  
+  解释不同场景为何产生不同耗电速度，识别导致快速耗电的主导驱动因素。
 
-- **RECOMMEND**:  
-  Translate model insights into practical guidance for users and potential power‑management strategies for an operating system; discuss how battery aging affects outcomes and how the framework can generalize to other portable devices.
+- **敏感性与不确定性（SENSITIVITY & UNCERTAINTY）**：  
+  分析当模型假设、参数取值与使用模式波动发生变化时，预测结果如何改变；量化不确定性并识别模型失效情形。
 
-To support parameter estimation and validation, we will use the provided primary dataset `MCM_2026_A/Database/`, which contains per‑device, seconds‑level logs (timestamped battery and context variables such as battery percentage, temperature, voltage, current, network type, screen state, charging state, and foreground app). The accompanying file `Activation_Date_Phone.xlsx` provides device activation dates that can be used to stratify or proxy battery aging.
+- **建议（RECOMMEND）**：  
+  将模型洞见转化为对用户的节能建议与对操作系统电源管理策略的启示；讨论电池老化对结果的影响，以及模型框架对其他便携设备的可扩展性。
+
+为支持参数估计与模型验证，我们采用 `MCM_2026_A/Database/` 作为主数据集：其中每个 CSV 以设备标识命名，记录秒级采样的电池与使用环境变量（如时间戳、电量百分比、温度、电压、电流、网络类型、亮屏状态、充电状态、前台应用等）；`Activation_Date_Phone.xlsx` 提供设备激活日期信息，可用于刻画电池使用年限/老化差异。
+
+（第 1 章后续内容留白）
+
+### 2 符号记述与问题假设
+
+#### 2.1 符号与记号表（Notation）
+
+| 记号 | 含义 | 单位/取值 | 数据来源/说明 |
+| --- | --- | --- | --- |
+| \(t\) | 连续时间 | s（或以时间戳换算） | 由 `timestamp_ms`（epoch 毫秒）换算 |
+| \(SOC(t)\) | 电量状态（State of Charge） | \([0,1]\) | 由电量百分比近似：\(SOC \approx \\text{level}/100\) |
+| \(C_{\\text{nom}}\) | 电池标称容量 | mAh | 日志列 `battery_capacity_mAh` |
+| \(C_{\\text{eff}}\) | 电池有效容量（考虑温度/老化后的等效容量） | mAh | 待估计/分组拟合（与激活日期相关） |
+| \(I(t)\) | 电池电流（放电为正的约定电流） | mA | 日志列 `battery_current_mA`（需结合充电状态解释符号/方向） |
+| \(V(t)\) | 电池端电压 | mV | 日志列 `battery_voltage_mV` |
+| \(T(t)\) | 电池温度 | ℃ | 日志列 `battery_temp_C` |
+| \(u_{\\text{scr}}(t)\) | 亮屏指示变量 | \(\{0,1\}\) | 日志列 `screen_on`（True/False） |
+| \(u_{\\text{chg}}(t)\) | 充电指示变量 | \(\{0,1\}\) | 日志列 `is_charging`（True/False） |
+| \(u_{\\text{net}}(t)\) | 网络模式 | {wi‑fi, mobile, none, …} | 日志列 `network_type` |
+| \(a(t)\) | 前台应用（或活动标识） | 字符串 | 日志列 `foreground_app`（用于行为分段/负载代理） |
+| \(\Delta t_k\) | 相邻采样时间间隔 | s | 由时间戳差分得到（采样近似 1–2 s） |
+| \(\tau_{\\text{empty}}\) | 距离耗尽时间（time‑to‑empty） | s 或 h | 由模型预测得到 |
+
+> 注：随着后续模型扩展（如引入温度修正项、老化参数、负载分解项等），本表将同步增补新符号以保持全文一致。
+
+#### 2.2 问题假设（Assumptions）
+
+题目要求建立连续时间、具有机理解释的电池耗电模型。由于题面并未提供固定数据库，下列假设仅针对“真实智能手机电池系统与使用情景”提出（而非对任何特定数据集字段作预设），以保证模型可定义、可求解、可用于预测与解释：
+
+1. **SOC 与系统电量指示的映射假设**：在短时间尺度上，将系统显示的电量百分比视为 \(SOC(t)\) 的线性近似，即 \(SOC(t) \\approx \\text{battery\\_percent}(t)/100\)。  
+   理由：题目要求输出 \(SOC(t)\) 并预测 time‑to‑empty；在缺少电芯的完整 OCV‑SOC 曲线与厂商内部估算细节时，电量百分比作为可观测且工程上常用的 SOC 代理，适合作为模型的状态观测量。
+
+2. **电池容量短期稳定假设**：在单次分析的短时间窗口内（如日内至数日），标称容量 \(C_{\\text{nom}}\) 可视为常数；温度与老化对容量的影响通过有效容量 \(C_{\\text{eff}}\) 的参数化体现，而不在该窗口内发生快速漂移。  
+   理由：电池老化通常在更长时间尺度显著；将其参数化可兼顾题目对老化讨论的要求与短窗内参数可辨识性。
+
+3. **电量守恒（库伦计）假设**：电池的 SOC 变化主要由净电流决定，满足  
+   \n   \n   \[\\dot{SOC}(t)= -\\frac{I_{\\text{net}}(t)}{C_{\\text{eff}}}\\cdot \\eta(t),\\]\n+   \n   \n   其中 \(I_{\\text{net}}(t)>0\) 表示净放电、\(I_{\\text{net}}(t)<0\) 表示净充电，\(\eta(t)\) 为充/放电库伦效率（可取常数或分段常数）。  
+   理由：这是连续时间电池模型最基本的守恒关系，能够将“负载强度/充电行为”与 \(SOC(t)\) 直接联系，满足题目强调的机理性要求。
+
+4. **分段近似假设（用于数值求解与验证）**：在短时间间隔 \(\Delta t_k\) 内，将外部负载与环境条件视为分段常值或分段线性，从而可对连续时间模型进行数值积分，并与离散观测进行对比。  
+   理由：现实使用行为在微观上是离散事件叠加，但在秒级到分钟级尺度可用分段近似刻画；该假设是连续系统与离散观测对齐的必要桥梁。
+
+5. **温度影响可参数化假设**：温度对电池性能的影响可通过少量参数化函数表示，例如 \(C_{\\text{eff}}=C_{\\text{eff}}(T)\) 与/或内阻 \(R_{\\text{int}}=R_{\\text{int}}(T)\)，并允许在常温附近采用一阶近似。  
+   理由：题目明确指出温度会降低有效容量并影响放电表现；参数化处理既保留机理解释，又避免引入不可获取的电化学细节。
+
+6. **负载可解释分解假设**：手机的总负载可视为若干可解释子负载的叠加（如屏幕、计算、网络、后台等），并允许用“模式/状态”来近似描述不同使用场景下的负载差异。  
+   理由：题目要求识别快速耗电的驱动因素；将总负载分解为可解释成分或模式是实现“诊断（DIAGNOSE）”的必要结构。
+
+7. **充电优先与净电流假设**：当设备外接电源时，电池端的净电流由“充电供给”与“即时负载”共同决定；当未外接电源时，净电流由负载决定。  
+   理由：题目要求在现实条件下建模；现实中插电使用会出现“边充边用”，需要用净电流的观点统一处理充/放电两种工况。
+
+8. **忽略自放电的假设**：在关注的时间尺度内（日内至数日），忽略自放电对 \(SOC(t)\) 的影响，相比设备负载功耗其量级可忽略。  
+   理由：自放电通常在更长时间尺度显著；本题核心关注使用行为与环境条件驱动的耗电差异。
 
