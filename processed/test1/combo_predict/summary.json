@@ -1,0 +1,12 @@
+{
+  "n_combos_total": 60,
+  "n_combos_with_slices": 2,
+  "n_combos_evaluated": 2,
+  "acc_mean_over_combos": 0.4119184107993694,
+  "acc_min_over_combos": 0.20973332508650677,
+  "WIN_MIN": 120,
+  "STEP_MIN": 30,
+  "DOMINANCE": 0.8,
+  "MIN_TEST_TOTAL_MIN": 240,
+  "MIN_TRAIN_POINTS": 2000
+}

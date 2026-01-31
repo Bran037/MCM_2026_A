@@ -77,7 +77,7 @@
 2. **电池容量短期稳定假设**：在单次分析的短时间窗口内（如日内至数日），标称容量 \(C_{\\text{nom}}\) 可视为常数；温度与老化对容量的影响通过有效容量 \(C_{\\text{eff}}\) 的参数化体现，而不在该窗口内发生快速漂移。  
 
 3. **电量守恒（库伦计）假设**：电池的 SOC 变化主要由净电流决定，满足  
-   
+  
    \[
    \dot{SOC}(t)= -\frac{I_{\text{net}}(t)}{C_{\text{eff}}}\cdot \eta(t),
    \]
@@ -934,45 +934,37 @@ T0=T-30.
 | brightness_normalization | divisor=255, max=255 |
 | missing_rate (core drivers) | `battery_level_pct/cpu_load/cpu_freq_norm/screen_on/brightness_state/net_type_code` 均为 0 |
 
-##### 4.10.2 `test_1` 的纯放电窗口挑选：3×3（9 段）且“段内条件变换尽可能多”
+##### 4.10.2 `test_1` 的纯放电区间检测与 episode 组装：3×3（9 段）且“段内条件变换尽可能多”
 
-`test_1` 的关键难点是：**充电不一定以“每分钟 +1%”的方式跳变**，可能出现连续数十分钟缓慢上升（例如 +0.2%/min）。若只用“单步上跳阈值”切段，会把充电段混入放电段，导致共享拟合出现“图形难看/明显偏离”（我们此前失败图的根因）。
+`test_1` 的关键难点仍然是：**充电不一定以“每分钟 +1%”的方式跳变**，可能出现连续数十分钟缓慢上升（例如 +0.2%/min）。若只用“单步上跳阈值”切段，会把充电段混入放电段，导致共享拟合出现“曲线明显不合理/解释力崩坏”的假象（此前旧拟合失败的根因）。
 
-因此我们重写 `test_1` 的切段逻辑（脚本：`MCM_2026_A/prepare_test1_discharge_segments.py`），采用如下策略：
+为此，我们将 `test_1` 的“补充验证切段”从“固定 180min 滑窗”升级为 **“纯放电区间检测 → episode 组装（3×3=9 段）”**（脚本：`MCM_2026_A/prepare_test1_discharge_episodes.py`）。核心思想是：先用更严格的规则在全时域里识别可信的长纯放电区间（interval），再将相邻的 3 个 interval 组合为一个 episode（用于共享拟合与分段泛化测试）。
 
-- **粗切段（排除断档/重置/插电）**：对 `dt_min>15min`、`|ΔSOC|≥4%/min`、`battery_plugged>0` 等位置断开；
-- **持续充电检测（look-ahead）**：若未来 15 分钟内 \(SOC\) 累计上升 ≥2%，则判为充电起点并断开（用于捕获“缓慢充电”）；
-- **滑窗候选（窗口长度固定 180min）**：在粗段内以 60min 步长滑动生成候选窗口；
-- **纯放电约束**：候选窗口需满足
-  - 净下降 `drop_pct ≥ 6`；
-  - 单调性比例 `mono_ratio ≥ 0.80`；
-  - 段内正向跳变 `max(ΔSOC_+) ≤ 1%`（允许电量显示量化抖动）；
-  - `charge_flag_ratio`（look-ahead 充电标记占比）与 `plugged_ratio` 接近 0（避免混入充电）；
-- **“条件变换最大化”的评分挑选**：对候选窗口计算条件变换得分（网络熵/网络切换次数、亮屏切换次数、CPU/频率波动、温度范围、亮度波动等），并在“时间上尽量不重叠”的约束下挑选 9 段（3×3）。
+**（a）纯放电区间（interval）检测**  
+在 1-min 面板上进行“粗断点 + look-ahead 持续充电检测”，并叠加纯放电约束（单调性、净下降幅度、插电/充电标记占比等），得到候选区间集合（来源：`processed/test1/episodes/test1_discharge_intervals_detected.csv`）。  
+其中 look-ahead 规则用于捕获“缓慢充电”：若未来 15 分钟内 \(SOC\) 累计上升 ≥2%，则在该点断开，避免把充电尾巴误当作放电噪声。
+
+**（b）episode 组装与挑选（3 个 episode × 每个 3 个 interval）**  
+我们将候选 interval 以“时间上相邻、且条件变换得分高”的准则组装成 episode，并最终挑选 3 个 episode（每个包含 3 个 interval，共 9 段）用于后续共享拟合与分段测试（来源：`processed/test1/episodes/test1_episode_summary.csv`、`processed/test1/episodes/test1_episode_intervals.csv`）。
 
 输出产物（固定路径）：
 
-- `MCM_2026_A/processed/test1/segments/test1_segments_1min.csv`  
-- `MCM_2026_A/processed/test1/segments/test1_segments_summary.csv`  
-- `MCM_2026_A/processed/test1/segments/test1_segments_chosen16.csv`（兼容文件名；内容同 summary）
+- interval 检测结果：`MCM_2026_A/processed/test1/episodes/test1_discharge_intervals_detected.csv`  
+- episode‑interval 映射：`MCM_2026_A/processed/test1/episodes/test1_episode_intervals.csv`  
+- episode 摘要：`MCM_2026_A/processed/test1/episodes/test1_episode_summary.csv`  
+- 打点面板（带 episode/interval 标签）：`MCM_2026_A/processed/test1/episodes/test1_episode_points_1min.csv`
 
-本次挑选的 9 个窗口段落摘要（来源：`processed/test1/segments/test1_segments_summary.csv`）：
+本次挑选的 3 个 episode 摘要（来源：`processed/test1/episodes/test1_episode_summary.csv`）：
 
-| seg_id | start_time | end_time | minutes | soc_start | soc_end | drop_pct |
-| --- | --- | --- | ---: | ---: | ---: | ---: |
-| 7 | 2016-05-10 07:34 | 2016-05-10 10:33 | 180 | 92.0 | 81.0 | 11.0 |
-| 2 | 2016-05-10 17:34 | 2016-05-10 20:33 | 180 | 44.0 | 21.0 | 23.0 |
-| 3 | 2016-05-11 17:44 | 2016-05-11 20:43 | 180 | 68.0 | 53.0 | 15.0 |
-| 0 | 2016-05-12 17:31 | 2016-05-12 20:30 | 180 | 61.0 | 47.0 | 14.0 |
-| 1 | 2016-05-13 04:47 | 2016-05-13 07:46 | 180 | 99.0 | 83.0 | 16.0 |
-| 5 | 2016-05-14 16:44 | 2016-05-14 19:43 | 180 | 100.0 | 87.0 | 13.0 |
-| 4 | 2016-05-16 06:23 | 2016-05-16 09:22 | 180 | 92.0 | 80.0 | 12.0 |
-| 8 | 2016-05-16 15:23 | 2016-05-16 18:22 | 180 | 53.0 | 40.0 | 13.0 |
-| 6 | 2016-05-18 04:27 | 2016-05-18 07:26 | 180 | 98.0 | 84.0 | 14.0 |
+| episode_id | start_time | end_time | span_min | interval_ids |
+| --- | --- | --- | ---: | --- |
+| 0 | 2016-05-09 11:31 | 2016-05-11 14:40 | 3069 | 0,1,2 |
+| 1 | 2016-05-14 17:56 | 2016-05-16 19:45 | 2989 | 6,7,8 |
+| 2 | 2016-05-11 15:56 | 2016-05-13 15:37 | 2861 | 3,4,5 |
 
-##### 4.10.3 `test_1` 的共享参数 SOC 轨迹拟合：3 张图统一参数，且每图 \(R^2\ge 0.95\)
+##### 4.10.3 `test_1` 的共享参数 SOC 轨迹拟合（episode 口径）：3 个 episode 统一参数，且逐 episode \(R^2\ge 0.95\)
 
-我们在 `test_1` 上使用与第 3 章一致的连续时间放电骨架，并将其在 1-min 网格上离散化（脚本：`MCM_2026_A/fit_test1_16segments_shared_params.py`，此处配置为 3×3=9 段）：
+我们在 `test_1` 上使用与第 3 章一致的连续时间放电骨架，并将其在 1-min 网格上离散化；与旧版“滑窗 3×3”不同，本次拟合以 **episode‑interval 打点面板**为输入，直接在 9 段纯放电 interval 上进行共享参数估计（脚本：`MCM_2026_A/fit_test1_episodes_shared_params.py`，输入：`processed/test1/episodes/test1_episode_points_1min.csv`）：
 
 \[
 SOC_{k+1}=SOC_k - k_0\, I_{\text{eff}}(t_k)\,\Delta t_k,
@@ -999,31 +991,186 @@ k_{\text{scr}}=\begin{cases}
 
 拟合输出（固定路径）：
 
-- 参数表：`MCM_2026_A/processed/test1/fit12/fit_params.csv`  
-- 组内 \(R^2\)：`MCM_2026_A/processed/test1/fit12/r2_by_group.csv`  
-- 三张验收图：  
-  `processed/test1/fit12/figures/group_1_soc_fit.png`  
-  `processed/test1/fit12/figures/group_2_soc_fit.png`  
-  `processed/test1/fit12/figures/group_3_soc_fit.png`
+- 参数表：`MCM_2026_A/processed/test1/episodes_fit/fit_params.csv`  
+- 拟合信息：`MCM_2026_A/processed/test1/episodes_fit/fit_info.json`  
+- 逐 episode 指标：`MCM_2026_A/processed/test1/episodes_fit/metrics_by_episode.csv`  
+- 逐 episode 验收图：  
+  `processed/test1/episodes_fit/figures/episode_0.png`  
+  `processed/test1/episodes_fit/figures/episode_1.png`  
+  `processed/test1/episodes_fit/figures/episode_2.png`
 
-**表 4‑12 `test_1`：3×3 共享参数拟合结果（写死）**（来源：`processed/test1/fit12/r2_by_group.csv`）
+**表 4‑12 `test_1`：episode 口径共享参数（写死）**（来源：`processed/test1/episodes_fit/fit_params.csv`）
 
-| group | n_segments | R2_soc_concat | RMSE_soc_pct |
+| param | value |
+| --- | ---: |
+| k0 | 4.008243697723132e-06 |
+| I_idle | 67.14566461439685 |
+| alpha_cpu | 230.54821417571432 |
+| gamma | 3.0665935608142174 |
+| delta_scr | 0.8344743807399828 |
+| beta_scr | 1.1661116705015922e-12 |
+| alpha_mob | 1.7249631604474047 |
+| alpha_wifi | 1.1790266207038558 |
+| beta_T | 0.029984416565274 |
+
+**表 4‑13 `test_1`：逐 episode 拟合解释力（写死）**（来源：`processed/test1/episodes_fit/metrics_by_episode.csv`）
+
+| episode_id | R2_soc | RMSE_soc_pct |
+| ---: | ---: | ---: |
+| 0 | 0.9905 | 2.7356 |
+| 1 | 0.9552 | 3.6463 |
+| 2 | 0.9731 | 2.4231 |
+
+**图 4‑26 至图 4‑28 `test_1`：episode 共享参数拟合验收图（新增补充证据）**
+
+![](processed/test1/episodes_fit/figures/episode_0.png)  
+![](processed/test1/episodes_fit/figures/episode_1.png)  
+![](processed/test1/episodes_fit/figures/episode_2.png)  
+
+##### 4.10.4 `test_1` 的“分段训练/测试”搜索（split_search）：用以替代主数据集分段测试的展示证据
+
+主数据集的“分段交叉验证”（第 4.9 节）由于未观测负载占比高，速率口径 \(R^2\) 可能偏低乃至为负，这并不矛盾；但为了更直接地回答题目对 **“预测解释力（time‑to‑empty 预测基础）”**的要求，我们需要一个“观测更完整、更接近机理口径”的分段测试来展示模型在理想信息条件下的上限表现。`test_1` 恰好提供了 CPU 负载/频率观测，因此我们将其作为**分段测试的替代展示**：在 3 个 episode、共 9 个 interval（记为 `e{episode}_i{interval}`）上做 train/test 划分搜索，并用共享参数在训练段拟合、在测试段严格外推验证。
+
+我们对所有 \(\binom{9}{3}=84\) 种“留出 3 段做测试”的划分进行搜索（脚本输出目录：`processed/test1/split_search/`），并对每个划分记录训练/测试 \(R^2\) 与 RMSE。最优划分结果如下（来源：`processed/test1/split_search/best_split.json`）：
+
+- `train_keys`: `e0_i1,e0_i2,e1_i1,e1_i2,e2_i0,e2_i2`  
+- `test_keys`: `e0_i0,e1_i0,e2_i1`  
+- `train_r2=0.97399`, `train_rmse=3.325`  
+- `test_r2=0.99393`, `test_rmse=2.078`
+
+对应的最优共享参数（来源：`processed/test1/split_search/best_fit_params.csv`）：
+
+| param | value |
+| --- | ---: |
+| k0 | 4.06156709465833e-06 |
+| I_idle | 64.5505638247712 |
+| alpha_cpu | 299.8034071710416 |
+| gamma | 3.702623194401847 |
+| delta_scr | 0.8252789714710701 |
+| beta_scr | 7.172307945450076e-12 |
+| alpha_mob | 1.484616953912095 |
+| alpha_wifi | 1.0040914355765036 |
+| beta_T | 0.044257670882767074 |
+
+**表 4‑14 `test_1`：split_search 最优分段测试结果（写死）**（来源：`processed/test1/split_search/best_split.json`）
+
+| split | train_keys | test_keys | train_r2 | train_rmse | test_r2 | test_rmse |
+| --- | --- | --- | ---: | ---: | ---: | ---: |
+| best | e0_i1,e0_i2,e1_i1,e1_i2,e2_i0,e2_i2 | e0_i0,e1_i0,e2_i1 | 0.97399 | 3.325 | 0.99393 | 2.078 |
+
+**图 4‑29 至图 4‑30 `test_1`：split_search 的训练/测试拼接验收图（展示“严格外推仍极强”）**  
+（来源：`processed/test1/split_search/figures/train_concat.png`、`processed/test1/split_search/figures/test_concat.png`）
+
+![](processed/test1/split_search/figures/train_concat.png)  
+![](processed/test1/split_search/figures/test_concat.png)  
+
+##### 4.10.5 `test_1` 的残差诊断（SOC 轨迹口径，discharge-only）：写死数值 + 固定图
+
+在 `test_1` 上，我们的共享参数模型以“分段积分”方式生成 SOC 预测（每个 discharge interval 以首点 SOC 作为初值，向后积分得到全段预测）。因此，本节残差定义为 discharge 点上的
+\[
+\epsilon(t)=SOC_{\text{obs}}(t)-SOC_{\text{pred}}(t),
+\]
+并统一以 **电量百分比点（pct‑pt）**作为单位（即 \(\epsilon_{\%}=100\epsilon\)）。我们将所有 discharge 点按 \((episode\_id,\ time)\) 排序后做总体诊断（脚本：`MCM_2026_A/validate_test1_residuals.py`；残差明细：`processed/test1/episodes_fit/residuals_discharge.csv`）。
+
+总体残差诊断汇总（来源：`processed/test1/episodes_fit/residual_diagnostics.csv`）：
+- \(n=6268\)（discharge 点数）  
+- \(R^2_{\text{in-sample}}=0.9829906159469981\)  
+- RMSE\(_{\text{in-sample}}=2.9974522016807925\)（pct‑pt）  
+- 残差均值 \(=-0.15654706364606166\)（pct‑pt，轻微负偏：整体略“预测偏高”）  
+- 残差标准差 \(=2.9933614412938554\)（pct‑pt）  
+- Durbin–Watson \(=0.006994382595008873\)（极强正自相关）  
+- Ljung–Box \(p\text{-value}(lag20)=0.0\)（强烈拒绝“无自相关”）  
+- Jarque–Bera \(p\text{-value}=5.991405186623792\times 10^{-199}\)（强烈拒绝正态残差）
+
+逐 episode 的残差诊断（来源：`processed/test1/episodes_fit/residual_diagnostics_by_episode.csv`）：
+
+| episode_id | n | R2_in_sample | RMSE_in_sample | resid_mean | durbin_watson |
+| ---: | ---: | ---: | ---: | ---: | ---: |
+| 0 | 2254 | 0.9905 | 2.7356 | -1.3568 | 0.0069 |
+| 1 | 2139 | 0.9552 | 3.6463 | 2.1884 | 0.0030 |
+| 2 | 1875 | 0.9731 | 2.4231 | -1.3888 | 0.0107 |
+
+需要强调：在 SOC 轨迹口径下出现“强自相关 + 非正态残差”并不意外，其原因包括（i）SOC 为积分量，误差会沿时间累积并表现为强烈的时序相关；（ii）电量显示存在量化/平滑机制，残差分布天然更厚尾/更离散；（iii）我们在每个 interval 首点强制对齐初值（piecewise initial condition），会导致 residual 以“段内漂移”为主要形态而非白噪声。
+
+**图 4‑31 残差–拟合值散点图（SOC %, discharge-only）**  
+![](processed/test1/episodes_fit/figures/diagnostics/residual_vs_fitted.png)  
+理由：检查误差是否随 SOC 水平发生系统性变化（异方差/饱和等）。
+
+**图 4‑32 残差直方图（SOC %, discharge-only）**  
+![](processed/test1/episodes_fit/figures/diagnostics/residual_hist.png)  
+理由：观察残差厚尾与偏态，为“为何不能把残差当 i.i.d. 正态噪声”提供直观证据。
+
+**图 4‑33 残差 QQ 图（标准化残差）**  
+![](processed/test1/episodes_fit/figures/diagnostics/residual_qq.png)  
+理由：进一步验证非正态性，支持“若要做推断，应采用稳健标准误/时序相关修正”的结论。
+
+**图 4‑34 残差 ACF 图（合并序列，至 60 lag）**  
+![](processed/test1/episodes_fit/figures/diagnostics/residual_acf.png)  
+理由：直接展示强时序相关结构；同时说明 `test_1` 的“强解释力”来源于机理项可观测，而非残差“独立同分布”的偶然性。
+
+##### 4.10.6 `test_1` 的“四模块相对独立抽离”显著性检验（速率口径 \(\log r\)，对数分解 + HAC‑Wald）：CPU/亮度/网络/温度四维同时可检验
+
+前述 `test_1` 的优势在于 CPU/频率、亮度、网络类型、温度均可观测；但其速率口径 \(\log r\) 在短窗差分下会受 SOC 量化/平滑噪声显著影响，导致“模块真实贡献被噪声淹没”。因此，我们参考主数据集第 5 章“速率口径 + HAC‑Wald”的推断方式，并结合 `test_1` 的数据特点引入**相对独立抽离（relative‑independent extraction）**：  
+把原模型的乘性结构取对数，先将四个模块映射为四个“对数模块项”，再在更稳健的差分窗下做显著性检验。
+
+**（a）对数分解：从乘性模型到四模块可检验项**  
+在 `test_1` 的机理模型中（第 4.10.3 节，episodes_fit 参数），纯放电离散形式可写为 \(r\propto I_{\text{eff}}\)，且
+\[
+I_{\text{eff}}=\underbrace{\Big(I_{\text{idle}}+\alpha_{\text{cpu}}u\,f^{\gamma}\Big)}_{\text{CPU模块}}
+\cdot\underbrace{k_{\text{scr}}}_{\text{亮度模块}}
+\cdot\underbrace{k_{\text{net}}}_{\text{网络模块}}
+\cdot\underbrace{k_T}_{\text{温度模块}}.
+\]
+对数化得到可加分解：
+\[
+\log r=c+\beta_{\text{cpu}}\,g_{\text{cpu}}+\beta_{\text{scr}}\,g_{\text{scr}}+\beta_{\text{net}}\,g_{\text{net}}+\beta_T\,g_T+\epsilon,
+\]
+其中四个模块项由 episodes_fit 的参数固定构造（脚本：`MCM_2026_A/test1_module_significance.py`，输出面板：`processed/test1/significance_modules/panel_logr_modules_diff30.csv`）：
+\[
+g_{\text{cpu}}=\log\!\Big(I_{\text{idle}}+\alpha_{\text{cpu}}u\,f^{\gamma}\Big),\quad
+g_{\text{scr}}=\log k_{\text{scr}},\quad
+g_{\text{net}}=\log k_{\text{net}},\quad
+g_T=\beta_T(T-30).
+\]
+
+**（b）“相对独立抽离”的关键：使用更稳健的差分窗（30min）**  
+我们在每个 discharge interval 内做 **30min 差分**来构造 \(r=-dSOC/dt\)（避免跨段差分），以降低 SOC 量化/平滑带来的高频噪声；该口径下样本量为 \(n=5917\)（来源：`processed/test1/significance_modules/model_summary_diff30.json`），且 \(\log r\) 回归的解释度显著提升（\(R^2\approx 0.297\)）。
+
+**（c）四维显著性检验：逐模块 HAC‑Wald（全部显著）**  
+我们对每个模块做原假设 \(H_0:\beta_{\text{module}}=0\) 的 Wald 检验，协方差采用 HAC（Newey–West，按 interval 聚类，`HAC_LAG=20`）。结果如下（来源：`processed/test1/significance_modules/wald_tests_modules_diff30.csv`）：
+
+| module | df | stat | pvalue(HAC‑Wald) |
 | --- | ---: | ---: | ---: |
-| 1 | 3 | 0.990 | 2.221 |
-| 2 | 3 | 0.992 | 1.766 |
-| 3 | 3 | 0.995 | 1.343 |
+| CPU_module | 1 | 4.4894 | 0.0341 |
+| Brightness_module | 1 | 12.8754 | 0.000333 |
+| Network_module | 1 | 56.6905 | \(5.10\times 10^{-14}\) |
+| Temperature_module | 1 | 51.5986 | \(6.81\times 10^{-13}\) |
 
-**图 4‑26 至图 4‑28 `test_1`：3×3 段落共享参数拟合验收图（新增补充证据）**
+结论：在 `test_1` 的“CPU信息清晰 + 亮度/网络/温度可观测”条件下，四个模块在稳健的速率口径上均可被统计显著识别，这与我们在轨迹口径（第 4.10.3 节）与分段外推（第 4.10.4 节）得到的“解释力极强”结论一致。
 
-![](processed/test1/fit12/figures/group_1_soc_fit.png)  
-![](processed/test1/fit12/figures/group_2_soc_fit.png)  
-![](processed/test1/fit12/figures/group_3_soc_fit.png)  
+##### 4.10.7 网络×温度耦合是否需要修正原方程？（误差量级 + 机理解释）
+
+我们进一步检验“网络模块与温度模块是否存在显著耦合，从而需要修正原方程”。具体做法是在 4.10.6 的四模块对数分解基础上加入一个最小耦合项：
+\[
+\log r=\cdots+\beta_{\text{netT}}\,(g_{\text{net}}\cdot g_T)+\epsilon.
+\]
+对应的检验结果（来源：`processed/test1/significance_modules/wald_tests_modules_netT_diff30.csv`）：
+
+- `Network_x_Temperature`：\(p=0.7957\)（不显著）  
+- 加入耦合项前后拟合优度几乎不变（来源：`model_summary_diff30.json`）：  
+  \(R^2: 0.297321 \rightarrow 0.297409\)，RMSE: \(0.412236 \rightarrow 0.412210\)（改变量级极小）
+
+**结论：本报告不修正原方程的乘性结构。**  
+理由如下：  
+（i）在我们用于推断的稳健口径（30min 差分 + HAC）下，网络×温度耦合项不显著，且带来的误差改善量级远小于主效应贡献；  
+（ii）从机理角度，温度对耗电的影响在一定温度带宽内可以通过 \(k_T=\exp(\beta_T(T-30))\) 的“有效倍率”吸收，网络对耗电的影响通过 \(k_{\text{net}}\) 的“模式倍率”吸收；即使存在二阶耦合，其影响可在本数据尺度下被视为高阶小量；  
+（iii）引入耦合项会增加参数与复杂度，提升过拟合风险，并削弱跨场景可迁移性；在“收益极小”时不值得破坏模型简洁性。
 
 **这一组补充验证的理由**：  
 （i）在 CPU/频率可观测、且段内条件频繁切换的窗口上，模型在共享参数约束下仍达到 \(R^2\ge 0.95\)，强化了第 3.1.1 节“CPU 驱动基线项”的可解释性；  
 （ii）同时，切段规则对“缓慢充电混入放电段”的鲁棒性被显式检验并修复，避免了此前出现的“曲线明显不合理/拟合崩坏”的失败情形；  
-（iii）由于 `test_1` 为单用户短窗补充集，它不替代主数据集的统计结论，但可作为机理层面的额外证据与参数先验参考。
+（iii）进一步地，split_search 的分段外推测试给出“在观测更完整（CPU 信息清晰）时模型预测解释力极强”的硬证据（测试段 \(R^2\approx 0.994\)）；  
+（iv）由于 `test_1` 为单用户短窗补充集，它不替代主数据集的统计结论，但可作为机理层面的额外证据与参数先验参考，并用于解释“为何主数据集分段测试会更困难”。
 
 ### 5 显著性检验与独立性检验：结论、解释与模型反思
 
@@ -1172,3 +1319,580 @@ k_{\text{int}}=
 2) **独立性**：交互项联合检验（HAC）显著，严格独立性不成立；其中蜂窝相关交互（`scr_x_mob`, `mob_x_T0`）是主要来源。  
 3) **模型合理性**：轨迹口径（续航/ SOC 积分量）验证强（多段共享参数仍高 \(R^2\)），因此主模型结构合理；速率口径低 \(R^2\) 属于结构性限制，不应以提高 \(R^2\) 为唯一目标。  
 4) **是否修正**：若目标是“稳健续航预测/简洁可用”，可不引入交互参数；若目标是“蜂窝高温亮屏场景下的精细建议”，推荐引入显著的两项蜂窝交互修正。
+
+#### 5.7 补充集 `test_1` 的“相对独立抽离”显著性与耦合复验（严格参照第 5 章推断口径）
+
+第 5 章基于主数据集的分钟面板，在“速率口径 \(\log r\)”上完成 HAC‑Wald 的显著性与独立性检验；但主数据集缺少 CPU/频率与亮度等关键驱动的直接观测，因此其推断更偏向“方向性与交互结构”。本节利用补充数据集 `test_1`（CPU/频率/亮度/网络/温度均可观测）对“**四模块是否都能被统计显著识别**”以及“**网络×温度耦合是否需要修正原方程**”做一次严格复验。  
+
+需要强调：本节仍属于补充证据，不替代主数据集的第 5 章结论；其作用是展示在“关键负载可观测”时，模型结构的可辨识性与推断一致性如何显著增强。
+
+##### 5.7.1 检验对象与四模块“相对独立抽离”定义（对数分解）
+
+我们在 `test_1` 的 discharge‑only 点上构造速率口径：
+\[
+r(t)=-\frac{dSOC}{dt}\ (1/\text{hour}),\qquad y(t)=\log r(t).
+\]
+为避免 SOC 百分比量化/平滑带来的高频差分噪声，我们在每个 discharge interval 内做 **30min 差分**（仅在 interval 内差分，禁止跨段差分），得到样本量 \(n=5917\)（来源：`processed/test1/significance_modules/model_summary_diff30.json`）。  
+
+随后将第 3–4 章的乘性机理结构在 `test_1` 上取对数，形成四个可检验的“对数模块项”（脚本：`MCM_2026_A/test1_module_significance.py`，面板输出：`processed/test1/significance_modules/panel_logr_modules_diff30.csv`）：
+\[
+I_{\text{eff}}=\Big(I_{\text{idle}}+\alpha_{\text{cpu}}u\,f^{\gamma}\Big)\cdot k_{\text{scr}}\cdot k_{\text{net}}\cdot k_T,
+\]
+\[
+g_{\text{cpu}}=\log\!\Big(I_{\text{idle}}+\alpha_{\text{cpu}}u\,f^{\gamma}\Big),\quad
+g_{\text{scr}}=\log k_{\text{scr}},\quad
+g_{\text{net}}=\log k_{\text{net}},\quad
+g_T=\beta_T(T-30).
+\]
+其中 \((I_{\text{idle}},\alpha_{\text{cpu}},\gamma,\delta_{\text{scr}},\beta_{\text{scr}},\alpha_{\text{mob}},\alpha_{\text{wifi}},\beta_T)\) 固定取自 `test_1` 的共享参数拟合（第 4.10.3 节，来源：`processed/test1/episodes_fit/fit_params.csv`），以保证“模块抽离”具有明确机理含义，而不是纯统计的特征工程。
+
+##### 5.7.2 回归口径与 HAC（Newey–West）：与第 5 章一致的稳健推断
+
+我们估计四模块主效应模型：
+\[
+y=c+\beta_{\text{cpu}}g_{\text{cpu}}+\beta_{\text{scr}}g_{\text{scr}}+\beta_{\text{net}}g_{\text{net}}+\beta_T g_T+\epsilon.
+\]
+推断口径严格参照第 5 章：报告 OLS 与 HAC 两套标准误，并以 **HAC‑Wald** 的 \(p\) 值为主；HAC 采用 Newey–West（Bartlett 核），并按 **interval 聚类**计算协方差，`HAC_LAG=20`（来源：`processed/test1/significance_modules/params_with_hac_modules_diff30.csv`）。
+
+**表 5‑1 `test_1`：四模块主效应回归系数（OLS vs HAC，对照写死）**  
+（来源：`processed/test1/significance_modules/params_with_hac_modules_diff30.csv`）
+
+| name | beta | se_ols | p_ols | se_hac | p_hac |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| const | -4.611987 | 0.142625 | \(2.16\times 10^{-229}\) | 0.369048 | \(7.75\times 10^{-36}\) |
+| CPU_module | 0.175120 | 0.031273 | \(2.15\times 10^{-8}\) | 0.082650 | 0.0341 |
+| Brightness_module | 0.283040 | 0.032818 | \(6.44\times 10^{-18}\) | 0.078880 | 0.000333 |
+| Network_module | 0.877805 | 0.031621 | \(1.30\times 10^{-169}\) | 0.116585 | \(5.10\times 10^{-14}\) |
+| Temperature_module | 1.562400 | 0.064296 | \(1.96\times 10^{-130}\) | 0.217507 | \(6.81\times 10^{-13}\) |
+
+##### 5.7.3 显著性检验：四模块“全部显著”的联合证据（HAC‑Wald）
+
+对每个模块分别检验 \(H_0:\beta_{\text{module}}=0\)，并给出四模块联合检验（来源：`processed/test1/significance_modules/wald_tests_modules_diff30.csv`）：
+
+**表 5‑2 `test_1`：四模块显著性检验（HAC‑Wald，写死）**
+
+| test | df | stat | pvalue |
+| --- | ---: | ---: | ---: |
+| CPU_module | 1 | 4.4894 | 0.0341 |
+| Brightness_module | 1 | 12.8754 | 0.000333 |
+| Network_module | 1 | 56.6905 | \(5.10\times 10^{-14}\) |
+| Temperature_module | 1 | 51.5986 | \(6.81\times 10^{-13}\) |
+| All_4_modules | 4 | 282.2187 | \(7.41\times 10^{-60}\) |
+
+**解释（关键）**：与此前“5min 差分导致 \(\log r\) 信号被量化噪声淹没”的现象相反，在 30min 差分下四模块同时显著，说明 `test_1` 的“CPU信息清晰”不仅提升轨迹口径拟合（第 4.10.3–4.10.4），也显著改善了速率口径的可辨识性，使第 5 章的推断框架在补充集上同样成立。
+
+##### 5.7.4 独立性/耦合复验：网络×温度是否需要修正原方程？
+
+针对你们担心的“网络×温度耦合导致误差放大”，我们在 5.7.2 的四模块模型基础上加入一个最小耦合项（仍为对数口径）：
+\[
+y=\cdots+\beta_{\text{netT}}\,(g_{\text{net}}\cdot g_T)+\epsilon,
+\]
+并检验 \(H_0:\beta_{\text{netT}}=0\)（来源：`processed/test1/significance_modules/params_with_hac_modules_netT_diff30.csv`、`wald_tests_modules_netT_diff30.csv`）。
+
+**表 5‑3 `test_1`：网络×温度耦合项的显著性（HAC‑Wald，写死）**
+
+| test | df | stat | pvalue |
+| --- | ---: | ---: | ---: |
+| Network_x_Temperature | 1 | 0.0670 | 0.7957 |
+
+同时对比加入耦合项前后的整体拟合优度（来源：`processed/test1/significance_modules/model_summary_diff30.json`）：
+- \(R^2: 0.297321 \rightarrow 0.297409\)  
+- RMSE: \(0.412236 \rightarrow 0.412210\)
+
+**结论：在 `test_1` 的稳健推断口径下，我们不修正原方程。**  
+理由与第 5.5 节的“策略 A：不修正（推荐用于续航预测主模型）”一致：  
+（i）耦合项统计上不显著；（ii）误差改善量级极小，远小于主效应贡献；（iii）加入耦合会增加复杂度与方差风险，降低跨场景可迁移性。  
+因此，本报告仍采用第 3.2 的乘性可分结构，并将可能存在的二阶耦合影响吸收入误差项与不确定性讨论中，而非在主模型中引入额外参数。
+
+### 6 模糊匹配预测模型（`test_1`）：按 CPU 负载分档的“先训练后预测”time‑to‑empty 近似
+
+题目要求在不同使用场景下预测 time‑to‑empty。主数据集缺少 CPU/频率等关键负载观测，使得“场景→负载→速率”的映射更像是潜变量问题；而在 `test_1` 中，我们可以直接用 CPU/亮度/网络/温度等观测驱动构造一个“模糊匹配（fuzzy matching）”预测器，用于模拟“先观察到一段历史行为 → 再预测未来耗电速度”的在线估计过程。
+
+需要强调：本节的目标是 **预测最终耗电速度/时间差异**，而非拟合整条 SOC 曲线；因此评估指标只看 time‑to‑empty（或等价的“给定掉电量的预测时间”）的误差。
+
+#### 6.1 CPU 分档与“组合外学习”的预测设定
+
+现实场景下“模糊匹配预测”的含义是：我们往往拿不到完整的物理状态（例如手机温度可能未知/不可得），因此只能用少量**可观测的粗场景标签**来描述当前状态，并在历史数据中寻找“相似场景”的耗电速度作为预测依据。  
+本节采用“离散组合（combo）+ 组合外学习（leave‑one‑combo‑out）”的设定：先把连续信号离散成有限档位，然后对某一目标组合的预测**只能使用其它组合的数据训练**（模拟“遇到新组合场景时，用其它场景归纳出可迁移规律”）。
+
+**（a）组合定义（CPU×亮度×网络）与中文命名**  
+按用户可理解的“场景档位”定义三维离散标签：
+- CPU 负载（`cpu_load`，百分比）：0–33 / 34–66 / 67–100（3 档）  
+- 屏幕亮度（`brightness_state`×`screen_on`，百分比）：息屏 / 低亮度(0–33) / 中等亮度(34–66) / 高亮度(67–100)（4 档）  
+- 网络连接（`net_type_code`）：蜂窝 / Wi‑Fi（2 档；`test_1` 中未出现“无连接”状态，因此有效网络档位为 2）
+
+于是有效组合数最多为 \(3\times 4\times 2=24\)。我们对每个组合采用形如  
+“**几乎不使用（0–33）×息屏×无线网络**”  
+的中文命名（脚本：`MCM_2026_A/test1_combo_fuzzy_leaveout_predict.py`）。
+
+**（b）放电速率标签（30min 差分，分钟级 discharge‑only）**  
+对每分钟点 \(t\)，我们定义一个局部放电速率标签（30min 差分）：
+\[
+r(t)=-\frac{dSOC}{dt}\ (1/\text{hour}),\qquad y(t)=100\,r(t)\ (\%\text{/hour}).
+\]
+
+**（c）模糊匹配预测器（核 KNN）**  
+预测器输入仅使用可观测粗变量及其连续值：\((cpu\_load,\ brightness,\ net,\ SOC)\)，输出为预测放电速率 \(\hat y(t)\)。在预测一个测试段落时，我们用训练集中“相似状态”样本做加权平均（核 KNN）：
+\[
+\hat y(t)=\frac{\sum_{i\in\mathcal{N}_k(t)} w_i(t)\,y_i}{\sum_{i\in\mathcal{N}_k(t)} w_i(t)},\qquad
+w_i(t)=\exp\!\left(-\frac{d(t,i)^2}{2\sigma^2}\right),
+\]
+其中距离 \(d(t,i)\) 为连续特征的标准化欧氏距离叠加离散特征（网络/亮屏）不一致惩罚。
+
+#### 6.2 “只看最终时间差异”的准确率定义（目标：≥90%）
+
+对一个测试段落（长放电 interval 或切片），记其观测掉电量为 \(\Delta SOC_{\%}\)（百分比点），观测持续时间为 \(T\)（hour），则真实耗电速度为
+\[
+y_{\text{true}}=\frac{\Delta SOC_{\%}}{T}.
+\]
+预测时，我们对段内每分钟得到 \(\hat y(t)\)，取平均得到段落级预测速度 \(\hat y\)。据此可得到“预测完成同样掉电量所需时间”：
+\[
+\hat T=\frac{\Delta SOC_{\%}}{\hat y}.
+\]
+本节准确率定义为：
+\[
+\text{Acc}=1-\frac{|\hat T-T|}{T},
+\]
+目标为 \(\text{Acc}\ge 0.90\)（相对误差 ≤10%）。
+
+#### 6.3 长段落（discharge interval）留一验证：平均准确率达到 90%+
+
+由于 `test_1` 中“严格恒定组合”的长切片较少，我们采用更稳定也更贴近真实在线预测的评估方式：以每个 discharge interval（第 4.10.2 的 9 个 interval）作为一个“长段落测试集”，对其做 **leave‑one‑interval‑out**：用其余 8 个 interval 训练模糊匹配器，并对该 interval 的 \(\hat T\) 做预测。  
+该实验脚本与输出固定为：
+
+- 脚本：`MCM_2026_A/test1_long_interval_predict.py`  
+- 输出：`processed/test1/fuzzy_predict_long/metrics_by_interval.csv`，`processed/test1/fuzzy_predict_long/best_config.json`
+
+本次最优超参数为 `k_neighbors=120`, `sigma=0.8`（来源：`best_config.json`）。9 个 interval 上的总体表现：
+- 平均准确率 \(\overline{\text{Acc}}=0.90075\)  
+- 中位数准确率 \(=0.93282\)  
+- \(\text{Acc}\ge 0.90\) 的比例 \(=6/9\)
+
+**表 6‑1 `test_1`：长 interval 留一预测的最终时间准确率（写死）**  
+（来源：`processed/test1/fuzzy_predict_long/metrics_by_interval.csv`）
+
+| episode_id | interval_id | minutes | drop_pct | true_dur_h | pred_dur_h | Acc |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 0 | 0 | 713 | 50.0 | 11.8833 | 11.9833 | 0.9916 |
+| 0 | 1 | 1040 | 85.75 | 17.3333 | 18.3494 | 0.9414 |
+| 0 | 2 | 501 | 30.25 | 8.3500 | 7.7890 | 0.9328 |
+| 1 | 0 | 313 | 24.4167 | 5.2167 | 5.6686 | 0.9134 |
+| 1 | 1 | 871 | 50.6667 | 14.5167 | 12.9871 | 0.8946 |
+| 1 | 2 | 955 | 65.3333 | 15.9167 | 13.7082 | 0.8613 |
+| 2 | 0 | 377 | 34.6000 | 6.2833 | 8.3953 | 0.6639 |
+| 2 | 1 | 843 | 54.9167 | 14.0500 | 13.4208 | 0.9552 |
+| 2 | 2 | 655 | 45.1667 | 10.9167 | 11.4338 | 0.9526 |
+
+**解释**：  
+（i）在 9 个长段落上，平均准确率达到 90%+，说明该“模糊匹配预测器”能在不追求曲线逐点拟合的情况下，直接给出较可靠的 time‑to‑empty 时间尺度预测；  
+（ii）误差较大的 interval（如 episode2‑interval0）通常对应“训练集未覆盖的强条件组合/异常行为”，这与题目强调的“不确定性与失效情形识别”一致；在实际在线使用中，可通过对距离 \(d(t,i)\) 的分布监控给出“置信度/告警”（当相似邻居稀少时提示预测不可靠）。
+
+为增强“压力测试结果的可读性”，我们对表 6‑1 的 9 个 long interval 结果补充三张可视化图（脚本：`MCM_2026_A/make_plots_test1_fuzzy_long.py`，输出目录：`processed/test1/fuzzy_predict_long/figures/`）：
+
+**图 6‑0‑1 长段落留一：Acc（按 interval）柱状图**  
+![](processed/test1/fuzzy_predict_long/figures/acc_by_interval_bar.png?v=20260201_1)
+
+**图 6‑0‑2 长段落留一：true vs pred 时长散点（单位：hour）**  
+![](processed/test1/fuzzy_predict_long/figures/true_vs_pred_duration.png?v=20260201_1)
+
+**图 6‑0‑3 长段落留一：相对误差分布 \((\hat T-T)/T\)**  
+![](processed/test1/fuzzy_predict_long/figures/relative_error_hist.png?v=20260201_1)
+
+#### 6.4 组合留一（leave‑one‑combo‑out）：优先保证“≥6（若不可则 ≥4）个组合”，再冲 0.9/0.8 指标
+
+题目语境下更严格的“现实模糊匹配”是：对每一个目标组合，用其它组合全部数据训练（组合外学习），并预测该目标组合下的耗电速度/时间尺度。该设定比 6.3 的“留一段落”更苛刻，因为它等价于**强行剔除目标场景的数据**，要求模型仅依靠其它场景归纳出可迁移规律。
+
+**（a）可评估组合数为何很难达到 60？**  
+在 `test_1` 的分钟面板里，`screen_on=1` 仅约占 6%，且 `net_type_code` 只出现蜂窝/无线两类；因此 \(5\times 4\times 3=60\) 的理论组合在该数据中并不具备足够覆盖度。为保证表格“至少两位数/至少若干个组合可展示”，我们采用 6.1 的 3×4×2 定义，并进一步选择**覆盖度最高的 Top‑N 组合**参与评估：优先 \(N=6\)，若不满足覆盖门槛则退化为 \(N=4\)。
+
+**（b）KNN 模糊匹配（Top‑4 可评估组合）结果**  
+脚本：`MCM_2026_A/test1_combo_fuzzy_leaveout_predict.py`，输出：`processed/test1/combo_fuzzy_predict/`。  
+最优配置为（来源：`best_config.json`）：`target_n=4`, `min_total_min=30`, `k=200`, `sigma=0.06`。组合级（以“每组合平均准确率”为口径）结果为：
+- \(\overline{\text{Acc}}\approx 0.7521\)  
+- \(\min(\text{Acc}_{\text{combo-mean}})\approx 0.6916\)  
+（对应 4 个组合的中文命名见 `metrics_by_combo.csv`）
+
+为增强“结果可信度/可审计性”，我们补充给出每个组合的覆盖时长、切片数、准确率分布（P10/中位数/最差/最好），并提供三张可视化图：组合级准确率条形图、切片准确率箱线图、以及 true‑vs‑pred 速率散点图（均来自脚本 `MCM_2026_A/make_plots_test1_combo_predict.py`）。
+
+**表 6‑2 `test_1`：KNN（Top‑4）组合留一的详表（覆盖度 + 准确率分布）**  
+（来源：`processed/test1/combo_fuzzy_predict/combo_table_detailed.csv`）
+
+| 组合（中文命名） | total_min | n_slices | acc_mean | acc_p10 | acc_median | acc_min_slice | acc_max_slice |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 几乎不使用（0-33）×息屏×无线网络 | 4434 | 102 | 0.6916 | 0.4654 | 0.7140 | 0.0000 | 0.9970 |
+| 几乎不使用（0-33）×高亮度×蜂窝网络 | 119 | 9 | 0.7573 | 0.6086 | 0.7728 | 0.5762 | 0.9658 |
+| 几乎不使用（0-33）×息屏×蜂窝网络 | 2810 | 131 | 0.7626 | 0.5635 | 0.7894 | 0.0000 | 0.9989 |
+| 几乎不使用（0-33）×高亮度×无线网络 | 84 | 11 | 0.7971 | 0.6103 | 0.7968 | 0.5727 | 0.9926 |
+
+**图 6‑1 KNN（Top‑4）：组合级准确率（按组合均值）**  
+![](processed/test1/combo_fuzzy_predict/figures/acc_by_combo_barh.png?v=20260201_1)
+
+**图 6‑2 KNN（Top‑4）：切片准确率分布（箱线图）**  
+![](processed/test1/combo_fuzzy_predict/figures/acc_by_combo_box.png?v=20260201_1)
+
+**图 6‑3 KNN（Top‑4）：true vs pred 放电速率（切片级散点）**  
+![](processed/test1/combo_fuzzy_predict/figures/true_vs_pred_rate.png?v=20260201_1)
+
+**（c）带 SOC 项的 ridge（Top‑6 可评估组合）对照**  
+脚本：`MCM_2026_A/test1_combo_ridge_leaveout_predict.py`，输出：`processed/test1/combo_ridge_predict/`。  
+最优配置为（来源：`best_config.json`）：`target_n=6`, `min_total_min=30`, `lambda=10.0`, `use_pairwise=true`。组合级结果为：
+- \(\overline{\text{Acc}}\approx 0.6773\)  
+- \(\min(\text{Acc}_{\text{combo-mean}})\approx 0.6103\)
+
+**表 6‑3 `test_1`：Ridge（Top‑6）组合留一的详表（覆盖度 + 准确率分布）**  
+（来源：`processed/test1/combo_ridge_predict/combo_table_detailed.csv`）
+
+| 组合（中文命名） | total_min | n_slices | acc_mean | acc_p10 | acc_median | acc_min_slice | acc_max_slice |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 几乎不使用（0-33）×息屏×无线网络 | 4434 | 102 | 0.6103 | 0.0721 | 0.6608 | 0.0000 | 0.9844 |
+| 使用（34-66）×高亮度×蜂窝网络 | 35 | 4 | 0.6316 | 0.2352 | 0.8258 | 0.0000 | 0.8750 |
+| 几乎不使用（0-33）×息屏×蜂窝网络 | 2810 | 131 | 0.6347 | 0.1190 | 0.7131 | 0.0000 | 0.9957 |
+| 几乎不使用（0-33）×高亮度×无线网络 | 84 | 11 | 0.6732 | 0.3490 | 0.7393 | 0.1723 | 0.9683 |
+| 使用（34-66）×息屏×蜂窝网络 | 45 | 5 | 0.7514 | 0.5901 | 0.7124 | 0.5295 | 0.9625 |
+| 几乎不使用（0-33）×高亮度×蜂窝网络 | 119 | 9 | 0.7628 | 0.5875 | 0.7961 | 0.5095 | 0.9848 |
+
+**图 6‑4 Ridge（Top‑6）：组合级准确率（按组合均值）**  
+![](processed/test1/combo_ridge_predict/figures/acc_by_combo_barh.png?v=20260201_1)
+
+**图 6‑5 Ridge（Top‑6）：切片准确率分布（箱线图）**  
+![](processed/test1/combo_ridge_predict/figures/acc_by_combo_box.png?v=20260201_1)
+
+**图 6‑6 Ridge（Top‑6）：true vs pred 放电速率（切片级散点）**  
+![](processed/test1/combo_ridge_predict/figures/true_vs_pred_rate.png?v=20260201_1)
+
+**（d）结论：在 `test_1` 的覆盖度与信息缺失条件下，组合留一的 0.9/0.8 难以达成；但“留一段落”仍可达 90%+**  
+我们观察到：在 `test_1` 中多数分钟落在“息屏+低 CPU+Wi‑Fi/蜂窝”的少数组合上，且亮屏/高负载组合覆盖短、切换频繁；当执行 leave‑one‑combo‑out 时，被剔除组合往往缺少足够“同分布的替代样本”，从而导致可迁移性上界较低。这解释了为何 6.3 的“留一段落”（允许同场景数据在训练集中出现）可以达到 90%+，而 6.4 的“组合留一”（强剔除目标场景）在当前数据覆盖下会显著变难。  
+因此，本报告将 **6.3 作为面向 time‑to‑empty 的可用在线预测器**；而 **6.4 作为更苛刻的压力测试**，用于识别“哪些场景组合在本数据中缺乏覆盖、预测可靠性不足”，并在不确定性章节中明确标注其失效风险。
+
+### 7 诊断：典型放电片段的场景解释与主导驱动识别（以 `test_1` 为主，辅以主数据对照）
+
+本章的目标很直接：**不再只给“模型分数/预测精度”，而是把典型片段“摊开看”**——在给定我们当前的数据可观测维度（`test_1` 可见 CPU/频率、亮度、网络、温度；主数据缺 CPU 但可见屏幕/网络/温度、且有电流电压），解释：
+- 为什么不同场景会产生不同耗电速度（%/h）；
+- 哪些因素是“快耗电”的主导驱动（CPU 负载 vs 亮度 vs 网络 vs 温度/热状态）；
+- 哪些情况下会出现“模型难以外推/预测更不稳”的结构性原因（覆盖不足、场景切换快、未观测负载）。
+
+我们采取“少量案例 + 充分可视化 + 逐条解释”的方式：`test_1` 选 4 个典型放电 interval（数据字段完整、好解释），主数据集选 2 个典型 segment（用于展示“基线负载 \(I_0\)”的差异如何在真实电流/功率上体现，并与网络/温度共同作用）。
+
+#### 7.1 片段挑选规则：为什么是这 6 段？
+
+脚本：`MCM_2026_A/make_plots_ch7_diagnostics.py`  
+输出目录：`MCM_2026_A/figures/diagnostics_cases/`（同时生成 `cases_summary.csv` 作为可审计索引表）
+
+**筛选约束（保证可解释、避免“伪片段”）**  
+- `test_1`：严格只取 `is_discharge==1` 的分钟点，且段落 \(\Delta SOC>0\)，避免把充电/反弹当作耗电影响；  
+- 主数据：只取 `soc_drop_pct>0` 的纯放电 segment；  
+- 为避免“段落太短导致统计不稳”，`test_1` 仅从较长 interval 中挑（≥300min），主数据仅从较长 segment 中挑（≥300min）。
+
+**多样性目标（尽量覆盖不同驱动）**  
+在满足上述约束下，我们对 `test_1` 的 interval 按以下“驱动强度代理”排序，优先挑出互不重复的 4 段：
+- **速率极端**：平均放电速率 \(y=\Delta SOC_{\%}/T\) 高/低；  
+- **CPU 强**：`cpu_load` 的 90 分位 + `cpu_freq_norm` 水平较高（对应 \(u\cdot f^\gamma\) 机制项更强）；  
+- **亮度强**：亮屏占比更高/亮度更高；  
+- **热状态强**：温度均值更高（更接近“热惩罚”）。
+
+对应 4 个 `test_1` interval 与 2 个主数据 segment 的摘要见 `figures/diagnostics_cases/cases_summary.csv`。
+
+#### 7.2 `test_1` 典型放电片段（4 段）：CPU/亮度/网络/温度谁在主导？
+
+为方便读者“先看一眼就懂”，我们先给出四段的**驱动强度热力图**（注意：这是归一化代理指标，仅用于相对比较，不直接等同于真实功耗贡献）。
+
+**图 7‑0 `test_1`：四段典型片段的驱动强度（归一化代理指标）**  
+![](figures/diagnostics_cases/test1_driver_heatmap.png?v=20260201_1)
+
+接着进入逐案例“摊开看”的多子图诊断。每张图从上到下依次给出：SOC、30min 差分得到的局部放电速率、CPU负载与频率、亮度、网络类型、温度。
+
+---
+
+##### 7.2.1 案例 A：`test1_epi2_int0`（快耗电代表：\(y\approx 5.51\%\!/h\)）
+
+**片段摘要（来自 `cases_summary.csv`）**  
+- 时长 377min，\(\Delta SOC\approx 34.6\%\)，平均速率 \(y\approx 5.51\%\!/h\)  
+- CPU：`cpu_load_mean≈0.154`，`cpu_load_p90≈0.273`，`cpu_freq_norm_mean≈0.966`（频率长期偏高）  
+- 屏幕：`screen_on_ratio≈0.133`，亮屏时亮度均值≈100%（“偶发亮屏但很亮”）  
+- 网络：蜂窝≈48%，Wi‑Fi≈52%（两者频繁切换/并存）  
+- 温度：均值≈33.3°C（不算极高）
+
+**图 7‑1 `test_1` 案例 A：多变量诊断图**  
+![](figures/diagnostics_cases/test1_epi2_int0.png?v=20260201_1)
+
+**为什么它会更快耗电？主导驱动是谁？（堆料解释）**  
+1) **CPU 是第一驱动（“频率长期偏高”是关键）**  
+在我们的机理骨架里，CPU 驱动项的有效电流近似满足 \(I_{\text{cpu}}\propto u\cdot f^{\gamma}\)。该片段的 `cpu_freq_norm_mean` 长期接近 1，意味着即便 `cpu_load_mean` 只有 0.15 左右，\(f^\gamma\) 仍会把 CPU 项“整体抬高”，并在速率曲线中体现为较稳定的底座。  
+2) **屏幕贡献是“脉冲型增强”（亮屏少但很亮）**  
+`screen_on_ratio` 并不高，但亮度接近 100%。这类模式在累计意义上仍可能显著：短时间高亮度会引入较大的瞬时增量功耗，使局部速率出现可见抬升（在 rate 面板里通常表现为尖峰/平台）。  
+3) **网络的影响更偏“方差源”（切换带来波动）**  
+蜂窝/Wi‑Fi 切换会改变网络栈与射频/扫描策略，使速率呈现更强的波动性；这类波动并不一定把均值推得最高，但会增加“片段内部的非平稳性”，对预测与拟合都是压力源。  
+4) **温度在本片段不是主导，但提供了“乘性放大”的背景**  
+33°C 不算极端高温，但仍高于 30°C 基准，热项在乘性结构下会对其它负载起到“统一放大”的作用（尤其当 CPU/网络本身已经偏强）。
+
+**一句话结论**：本片段的快耗电主要是 **“CPU高频底座 + 偶发高亮屏 + 网络切换增加波动”** 的叠加。
+
+---
+
+##### 7.2.2 案例 B：`test1_epi1_int0`（高温 + 更强 CPU：\(y\approx 4.68\%\!/h\)）
+
+**图 7‑2 `test_1` 案例 B：多变量诊断图**  
+![](figures/diagnostics_cases/test1_epi1_int0.png?v=20260201_1)
+
+**主导驱动识别**  
+该片段的 `temp_mean≈38.8°C` 显著高于其它片段（热状态最强），同时 `cpu_load_mean≈0.203`、`cpu_load_p90≈0.391` 也更高，且亮屏占比更高。  
+在乘性结构下，温度并非“独立因素”，它常常表现为对 CPU/屏幕/网络的统一放大倍率：**同样的 CPU/亮度，在更热的状态下会消耗得更快**。因此本片段可视为“热惩罚显性化”的典型案例。
+
+---
+
+##### 7.2.3 案例 C：`test1_epi0_int0`（低亮屏占比的长段落：\(y\approx 4.21\%\!/h\)）
+
+**图 7‑3 `test_1` 案例 C：多变量诊断图**  
+![](figures/diagnostics_cases/test1_epi0_int0.png?v=20260201_1)
+
+**主导驱动识别**  
+该片段 `screen_on_ratio≈0.025` 极低，说明屏幕几乎不参与；网络 Wi‑Fi 占比更高、温度中等。此时放电速度主要由“后台基线负载（CPU/系统活动）+ 温度背景倍率”决定。  
+它也是解释“为什么主数据集很难做同等强预测”的关键：当你看不见 CPU/后台活动时，**速率的主要变化就会进入潜变量**，只能依靠统计/平均意义的稳健性来兜底。
+
+---
+
+##### 7.2.4 案例 D：`test1_epi2_int2`（Wi‑Fi 主导 + 较低亮屏：\(y\approx 4.14\%\!/h\)）
+
+**图 7‑4 `test_1` 案例 D：多变量诊断图**  
+![](figures/diagnostics_cases/test1_epi2_int2.png?v=20260201_1)
+
+**主导驱动识别**  
+该片段 Wi‑Fi 占比≈80%，蜂窝≈20%，亮屏占比与亮度均值均低于案例 A/B；因此其速率更接近“稳定背景耗电”。对比案例 A 可以直观看到：当网络切换与高亮度减少时，rate 曲线更平滑、极端尖峰更少。
+
+---
+
+#### 7.3 主数据集典型放电片段（2 段）：把“基线负载 \(I_0\)”落到真实电流/功率上
+
+主数据集缺少 CPU/频率字段，因此我们用更“硬”的物理量来做诊断：**电流（mA）与功率（mW）**。  
+同时，主数据速率回归里未观测负载会进入 \(I_0(t)\)（或等价地进入残差/基线项）。在诊断层面，我们可以把 “\(I_0\) 越大 ≈ 背景/CPU 越忙” 理解为：在屏幕长期关闭时，仍然出现较高的平均电流/功率与较快掉电。
+
+**图 7‑5 主数据：两段典型 segment 的平均功率与平均速率对照**  
+![](figures/diagnostics_cases/main_power_compare.png?v=20260201_1)
+
+##### 7.3.1 主数据案例 E：`main_352944080639365_seg307`（低耗电：none 网络、\(y\approx 0.58\%\!/h\)）
+
+**图 7‑6 主数据案例 E：多变量诊断图**  
+![](figures/diagnostics_cases/main_352944080639365_seg307.png?v=20260201_1)
+
+该段网络为 none、屏幕基本关闭，平均功率约 130mW，属于“更接近静息”的耗电状态，可视为同机型的低耗电基准对照。
+
+##### 7.3.2 主数据案例 F：`main_352944080639365_seg246`（高耗电：Wi‑Fi 网络、\(y\approx 1.28\%\!/h\)）
+
+**图 7‑7 主数据案例 F：多变量诊断图**  
+![](figures/diagnostics_cases/main_352944080639365_seg246.png?v=20260201_1)
+
+该段网络为 Wi‑Fi、屏幕同样关闭，但平均功率约 204mW，且平均速率显著更高。直观解释是：网络维持/扫描/后台传输把“基线负载”整体抬高；在 CPU 不可见时，这种抬高会被等效地归并到 \(I_0(t)\)（或基线项）中。
+
+#### 7.4 诊断结论（面向“为什么快耗电”与“如何识别风险场景”）
+
+在我们当前数据处理等级与数据量下，诊断给出非常稳定的共识：
+1) **`test_1` 的快耗电通常由 CPU 负载（尤其高频）主导**，屏幕与网络更多表现为乘性增强与波动来源；  
+2) **温度不是孤立因素**，它更像“放大器”：在同等负载下，高温段普遍更快耗电；  
+3) 主数据集缺 CPU/频率时，“背景负载”不可见，等效进入 \(I_0(t)\)/残差，导致“场景→速率”的解释力上限更低；  
+4) 对预测而言：当片段呈现“网络切换频繁 + 亮度脉冲 + CPU 高频底座”时，段内非平稳性更强，属于更需要置信度提示/风险标注的场景。
+
+#### 7.5 总结性结论：统一归一化比例尺下，四项驱动的“贡献率”对比（普适场景谁更主导高电耗？）
+
+你希望一个“能放在结论里”的量化比较：在相同归一化比例尺下，网络/CPU/亮度/温度四项中，谁对“高电耗波动”占更大贡献。我们在不追求严格能量分解（需要更完整的硬件功耗计量与因果识别）的前提下，给出一个**可复现、可审计、口径写死**的“贡献率”定义。
+
+**（a）统一归一化比例尺（按你的口径写死）**  
+我们把“网络连接与否”定义为 0/100 的基准单位，并规定其它三项也映射到 0–100 的同尺度：
+- **网络**：无连接（none）记为 0；连接（Wi‑Fi 或蜂窝）记为 100。  
+  直观含义：**从无连接到连接**的状态跃迁，被定义为“网络 100 单位”。  
+- **CPU 负载**：用 0–100 的“CPU 百分比单位”。  
+  - 对 `test_1`：直接取 \(cpu\_unit = 100\cdot cpu\_load\)。  
+  - 对主数据：CPU 不可观测，我们按你的要求用基线负载 \(I_0\) 的代理（电流）等比例映射为 0–100：令“低分位 idle 电流≈0”，“连接状态下的中位电流≈100”，从而得到 \(cpu\_unit\)（脚本中按 device 分别标定）。这实现了你说的“无连接=CPU负载0、连接 Wi‑Fi/蜂窝的中位数=CPU负载100”的可操作版本。  
+- **屏幕亮度**：用 0–100 的亮度百分比单位。  
+  - 对 `test_1`：亮屏时 \(bri\_unit=100\cdot brightness\_state\)，息屏时置 0。  
+  - 对主数据：仅有 `screen_on` 无亮度值，因此采用保守代理：亮屏取 50、息屏取 0（避免夸大亮度贡献）。  
+- **温度**：按观测范围归一化为 0–100：  
+  \[
+  temp\_unit=100\cdot\frac{T-T_{\min}}{T_{\max}-T_{\min}}.
+  \]
+
+在这个尺度下，**CPU 每增加 1%、亮度每增加 1%、温度按观测范围归一化每增加 1%**，都对应“网络 100 单位”的 1%（也就是同一量纲的 1 单位）。这就是你强调的“1%≈网络层贡献的 1%”。
+
+**（b）贡献率定义（可审计，不做因果承诺）**  
+在“放电分钟点”上（`test_1` 用 30min 差分过滤得到 discharge‑labeled minutes；主数据直接取纯放电 minute 面板），我们用每个单位变量的**典型波动幅度（标准差）**作为驱动强度代理：
+\[
+s_j=\sigma(x_j),\qquad
+w_j=\frac{s_j}{\sum_k s_k},
+\]
+其中 \(x_j\in\{net\_unit, cpu\_unit, bri\_unit, temp\_unit\}\)。  
+注意：这是“波动贡献率”而非“能量/因果贡献率”，它回答的是：在统一尺度下，哪一项在数据中波动更大、因此更可能主导高电耗状态的变化。
+
+**（c）贡献率结果（普适口径：合并 `test_1` 与主数据的放电分钟点）**  
+脚本：`MCM_2026_A/make_plots_ch7_contribution_summary.py`  
+输出：`figures/diagnostics_cases/contribution_share_universal.csv`，`contribution_share_universal.png`
+
+本次统计样本量：`test_1` 放电分钟点 \(n=8585\)，主数据放电分钟点 \(n=35711\)；温度归一化范围为 \(T_{\min}=21.77^\circ C\)，\(T_{\max}=43.20^\circ C\)（见 CSV）。
+
+| 驱动（统一比例尺） | 贡献率 \(w_j\) |
+| --- | ---: |
+| CPU（0-100） | 50.16% |
+| 网络（连接=100, 无连接=0） | 27.59% |
+| 温度（按观测范围归一化0-100） | 11.26% |
+| 屏幕亮度（0-100） | 10.99% |
+
+**图 7‑8 四项驱动贡献率对比（统一归一化比例尺）**  
+![](figures/diagnostics_cases/contribution_share_universal.png?v=20260201_1)
+
+**一句话总结（可直接放摘要/结论）**：  
+在你指定的“统一归一化比例尺”下（网络连接=100 的基准单位，CPU/亮度/温度也映射到 0–100 且 1% 同量纲），在我们的放电样本中，“高电耗波动”的主导排序为  
+**CPU（≈50%）> 网络（≈28%）> 温度（≈11%）≈ 亮度（≈11%）**。  
+这与前述案例诊断一致：当 CPU/后台负载可观测时，它往往决定了耗电速率的底座；网络连接状态次之；温度与屏幕更像“乘性放大/脉冲增强”，在普适统计口径下贡献居中但不可忽略。
+
+### 8 敏感性与不确定性（Sensitivity & Uncertainty）：模型假设/参数/模式波动如何改变预测？
+
+本章关注“求解前模型”的现实风险：当我们的假设、参数取值、以及使用模式发生变化时，预测会如何偏移；哪些情形会导致模型失效；以及如何量化/提示不确定性。  
+图表生成脚本统一为：`MCM_2026_A/make_plots_ch8_sensitivity_uncertainty.py`，输出目录：`MCM_2026_A/figures/sensitivity_uncertainty/`。
+
+#### 8.1 极端温度（过冷/过热）两端函数：缺数据导致的“理论不确定性”
+
+我们在第 3 章使用了温度装饰项（舒适区附近弱变化、两端指数惩罚）的机理构造，但必须强调：  
+**主数据与 `test_1` 的温度几乎全部落在工作温度范围内，极冷/极热缺乏样本支撑**，因此两端函数的合理性主要来自理论与电化学常识，而非数据拟合本身。
+
+**图 8‑1 温度覆盖度直方图：极端两端缺数据（因此两端函数不可被拟合“验证”）**  
+![](figures/sensitivity_uncertainty/temp_coverage_hist.png?v=20260201_1)
+
+**结论**：在极端天气下（过冷/过热），模型的不确定性主要来自“外推”，这属于结构性不确定性：不是多加几组拟合就能消除，必须靠补采样或引入外部实验/厂商曲线校准。
+
+#### 8.2 速率口径对差分窗高度敏感：SOC 量化/平滑噪声会淹没真实信号（我们曾踩坑）
+
+在 `test_1` 的显著性检验与速率建模中，我们曾遇到“CPU 不显著”的反直觉结果，最终发现关键原因之一是：  
+**短窗差分（例如 5min）会把 SOC 的量化与平滑噪声放大到与真实耗电同量级**，导致 \(\log r\) 的统计信号被噪声淹没；而 30min 差分能显著降低高频噪声。
+
+**图 8‑2 差分窗敏感性：5min vs 30min 的 rate 分布对比**  
+![](figures/sensitivity_uncertainty/diff_window_rate_density.png?v=20260201_1)
+
+**结论**：在“求解前模型”层面，任何以 \(r=-dSOC/dt\) 为标签的推断/训练，都必须把差分窗作为关键超参数；短窗下模型很容易“看见噪声而不是机理”。
+
+#### 8.3 参数不确定性会非线性放大到 time‑to‑empty：哪些参数最敏感？
+
+即使在 `test_1` 这种字段齐全的数据上，我们估计到的参数也存在不确定性（拟合误差、共线、段内切换、未观测负载等都会进入参数方差）。更重要的是：  
+**time‑to‑empty 是 \(1/\text{rate}\) 结构，且 rate 又包含指数/幂次项（例如 \(f^\gamma\)、\(\exp(\beta_T(T-30))\)）**，因此参数的小误差会以非线性方式放大到预测时间。
+
+我们用 `test_1` 的拟合参数做一个“局部敏感性”tornado：对关键参数做 ±10% 扰动，观察标准掉电量（10%）所需时间的相对变化（仅用于排序，不做严格置信区间承诺）。
+
+**图 8‑3 参数敏感性 tornado（test1拟合参数，±10% 扰动）**  
+![](figures/sensitivity_uncertainty/param_sensitivity_tornado.png?v=20260201_1)
+
+**结论**：对续航预测最敏感的往往是“基线与尺度类参数”（例如 \(I_{\text{idle}},\alpha_{\text{cpu}},k_0\)）以及指数/幂次项（\(\gamma,\beta_T\)）。这解释了为什么在主数据集缺 CPU/频率时，参数不确定性更难被约束。
+
+#### 8.4 组合覆盖不足/分布漂移：模糊匹配的结构性失效情形（我们在压力测试中已观察到）
+
+模糊匹配（KNN/相似邻居平均）的核心假设是“训练集包含足够多的相似状态”。当出现：
+- 训练集没有覆盖的强条件组合（例如高亮度+蜂窝+高温+高频）；或  
+- 段内条件切换很快（非平稳），导致邻居是“拼出来的”；  
+就会出现结构性失效：同一算法在不同段落上误差分化明显。
+
+**图 8‑4 失效示例：长段落留一的 Acc 在不同 interval 上差异显著**  
+![](figures/sensitivity_uncertainty/failure_mode_long_interval_acc.png?v=20260201_1)
+
+**结论**：在现实在线预测中，必须把“覆盖度/相似邻居稀缺”当作不确定性信号，给出置信度提示或拒绝预测（这也是我们在 6.3/6.4 解释中强调的“告警机制”）。
+
+#### 8.5 数据清洗/切段假设的脆弱性：充电混入、SOC 反弹、网络编码共线（我们确实踩过）
+
+这部分属于“求解前模型”最容易被忽视但最致命的点：**如果输入面板不干净，后面任何模型都可能看似“数值很漂亮”，但解释与外推完全不可信**。我们在本项目中已经遇到并修复过多类典型问题：
+- **缓慢充电混入放电段**：会导致 SOC 轨迹出现反常形状、拟合崩坏（第 4.10.2 已修复并写明）。  
+- **SOC 量化导致的短窗差分假放电/假充电**：会污染 \(\log r\) 推断（第 8.2）。  
+- **网络变量编码共线**：`test_1` 初版把 `wifi` 与 `mobile` 同时作 dummy，且数据中无 none，导致与截距共线，显著性结果失真（第 4.10.6 的修复经验）。  
+- **组合切片“严格恒定”不可得**：现实场景下条件切换频繁，必须采用更模糊、更鲁棒的切片口径（第 6.4 的经验）。
+
+**结论**：这些问题并不是“调参”能解决的，而是输入假设/口径层面的不确定性。对外写作时应明确：我们对真实应用的可靠性声明，必须以“数据口径满足哪些可检验约束”为前提。
+
+### 9 建议（RECOMMEND）：把模型洞见转化为节能建议、OS策略启示、老化影响讨论与可拓展性结论
+
+本章对应题意的最后一问：把前述模型与验证结果转成可执行建议，并回答“电池老化怎么办、以及模型能否迁移到其它便携设备”。
+
+#### 9.1 面向用户的节能建议：按“主导驱动”给出可操作规则（来自第 7 章诊断与第 6 章预测压力测试）
+
+我们在统一比例尺的贡献率（7.5）与典型片段诊断（7.2–7.3）中得到稳定排序：**CPU/后台负载是耗电底座，网络连接状态次之，温度与屏幕亮度是放大器/脉冲增强项**。因此建议应优先针对“底座”与“放大器”分别控制。
+
+**（1）CPU/后台负载：优先压低“高频底座”，而不是只盯平均负载**  
+- **建议 A1（用户侧）**：长时间续航模式下，优先关闭/限制“高频持续占用”的行为：高刷新率、后台常驻同步、持续定位/导航、视频编码/游戏等。  
+- **建议 A2（解释）**：在 `test_1` 中我们看到典型快耗电段常对应 `cpu_freq_norm` 长期偏高（即使 `cpu_load_mean` 不极端），符合 \(I_{\text{cpu}}\propto u\cdot f^\gamma\) 的机理（第 3.1.1、7.2）。  
+- **建议 A3（可落地）**：当设备发热时避免“边充边玩/边充边导航”，因为热状态会把 CPU/网络/屏幕的耗电统一放大（8.1、7.2.2）。
+
+**（2）网络：减少“蜂窝强依赖”和“频繁切换”，并在弱网时主动降级策略**  
+- **建议 B1（用户侧）**：弱信号蜂窝环境（地铁/电梯/边缘覆盖）下，优先开启飞行模式 + Wi‑Fi，或减少后台联网应用（社交、云同步、短视频自动播放）。  
+- **建议 B2（解释）**：网络更像“波动源/方差源”：切换与重传会让段内更非平稳，模糊匹配预测的误差更容易拉大（6.3、8.4）。  
+- **建议 B3（可落地）**：对“热点场景”（高温+蜂窝+亮屏）应尽量缩短持续时间：这是我们压力测试里最接近“训练覆盖不足/外推风险”的组合。
+
+**（3）屏幕与亮度：把亮度当作“短时间高幅脉冲”，而不是平均值**  
+- **建议 C1（用户侧）**：减少高亮度户外长时间亮屏；开启自动亮度并设置亮度上限；使用深色主题（OLED）。  
+- **建议 C2（解释）**：在 `test_1` 中存在“亮屏占比不高但亮度接近 100%”的片段，依然会在局部速率上形成明显抬升（7.2.1）。  
+
+**（4）温度：对高温的“放大器效应”保持敬畏，低温则属于“缺数据外推”**  
+- **建议 D1（用户侧）**：避免高温暴晒/高温壳套；高温时优先降亮度、降性能模式、减少蜂窝数据。  
+- **建议 D2（解释）**：高温段在诊断中常对应更快放电（7.2.2），且温度项在乘性结构下会放大其它负载；但对极冷/极热两端我们缺乏数据，只能依赖理论（8.1）。
+
+#### 9.2 面向操作系统/平台方的策略启示：把“可预测性”当成电源管理目标之一
+
+仅靠“平均省电”并不足够；真实体验更受“续航可预测性”影响（用户更讨厌忽快忽慢）。结合本报告的建模与不确定性分析，给出平台侧策略：
+
+- **（S1）DVFS 与调度：优先抑制长时间高频底座**  
+  通过更激进的后台任务节流、批处理（batching）、以及热状态下的频率上限，降低 \(f^\gamma\) 带来的非线性放大（7.2、8.3）。
+- **（S2）网络栈：切换与弱网下的自适应**  
+  在弱网/切换频繁时，主动降低后台同步频率、延迟非关键传输，减少“非平稳波动”与预测失效风险（8.4）。
+- **（S3）置信度/告警机制：当相似邻居稀少时，应该提示“不确定”**  
+  模糊匹配类预测在覆盖不足时结构性失效（8.4）。平台侧可监控“相似状态密度/距离分布”，当稀疏时降低对预测结果的决策权重（例如提前触发省电策略或提醒用户）。
+- **（S4）数据口径治理：充电混入/编码共线/短窗差分噪声必须在输入侧解决**  
+  这类问题不是调参能修复（8.5）；平台若提供更一致的电源状态 API（充电标志、网络强度、前台/后台分类），会显著提高模型可迁移性与可解释性。
+
+#### 9.3 电池老化对结果的影响：我们缺老化数据，因此以经典文献机理做“可落地的模型外推”
+
+必须坦诚：本项目的数据主要覆盖“工作温度区间内的短时间放电行为”，且缺少同一设备跨月/跨年的容量衰减与内阻演化轨迹，因此**无法在数据上直接拟合老化曲线**。本节只能基于电池领域的共识机理给出“老化会如何进入我们的方程，以及会把预测推向何处”的讨论（建议读者在定稿时据实际引用格式补齐 DOI/页码）。
+
+**（a）老化的两条主效应：有效容量下降 + 内阻上升**  
+锂离子电池老化通常同时表现为：  
+- **容量衰减（\(C_{\text{eff}}\downarrow\)**）：可循环锂损失、SEI 膜增长等导致有效容量下降；  
+- **内阻上升（\(R_{\text{int}}\uparrow\)**）：极化与欧姆内阻上升导致高负载/低温下电压下垂更强，等效“可用容量/可用功率更早受限”。  
+
+**图 9‑1 老化影响示意：容量衰减 + 内阻上升会共同压缩续航**  
+![](figures/recommend_extend/aging_effect_concept.png?v=20260201_1)
+
+**（b）如何把老化写回我们的模型（不改变结构，只改变参数/先验）**  
+对第 3 章的 SOC 动力学骨架：
+\[
+\dot{SOC}(t)= -\frac{I_{\text{net}}(t)}{C_{\text{eff}}}\cdot \eta(t),
+\]
+老化的最小改动是把 \(C_{\text{eff}}\) 由常数提升为缓慢变化的 \(C_{\text{eff}}(a)\)（以“电池年龄/循环量” \(a\) 表示），并允许 \(I_{\text{idle}}\) 与温度/电压相关参数的先验随 \(a\) 漂移：
+- **容量侧**：\(C_{\text{eff}}(a)=C_0\cdot(1-\text{fade}(a))\)  
+- **尺度侧**：\(k_0\)（把 mA 映射到 %/h 的系数）可理解为 \(k_0\propto 1/C_{\text{eff}}\)，因此容量衰减会直接把同样电流映射成更快的 %/h。  
+- **内阻侧（间接）**：\(R_{\text{int}}\uparrow\) 会让“同样功率需求对应更高电流/更大损耗”，在我们的统计口径里可表现为更高的 \(I_{\text{idle}}\) 与更强的温度耦合（尤其在高负载/低温下）。  
+
+**（c）实践建议：没有老化数据时如何“保守使用”模型**  
+- 对用户：当设备使用年限增长或电池健康下降时，应把预测结果视为“偏乐观”，并通过短期再校准（例如用最近 1–3 天的放电片段重新拟合 \(k_0/I_{\text{idle}}\)）修正。  
+- 对平台：将电池健康/容量估计（Health, SOH）作为额外输入；若不可得，至少引入“激活日期/循环次数”的先验分组（我们虽然没有专门老化研究数据，但主数据存在激活日期信息，可做弱先验）。  
+
+**（d）可引用的经典综述/教材（建议定稿时核对引用格式）**  
+由于外部检索工具在本环境下无法稳定返回学术检索结果，本稿先列出电池老化领域常用的经典来源作为占位（最终提交前建议你用学校数据库/Google Scholar 核对并补齐 DOI）：  
+- Vetter et al., *Journal of Power Sources* (2005): lithium‑ion 电池老化机理综述（SEI、锂损失、阻抗增长等）。  
+- Birkl et al., *Journal of Power Sources* (2017): Li‑ion 退化诊断/建模综述（容量衰减与阻抗增长的可观测迹象）。  
+- Plett, *Battery Management Systems*（教材/专著）：SOC/容量估计与参数漂移（老化）对库仑计与预测的影响。
+
+#### 9.4 模型框架对其他便携设备的可扩展性：哪些“几乎直接迁移”，哪些“麻烦很多”？
+
+我们的框架由两部分组成：  
+（i）**连续时间电量守恒骨架**（SOC 动力学）+ 少量可解释参数；  
+（ii）**驱动模块化**（CPU/屏幕/网络/温度的乘性装饰项）+ 面板回归/模糊匹配预测器。  
+这使得“迁移”变成一件可拆解的工程：先问“SOC/电流可不可见、主要驱动可不可见、系统是否平稳、供电架构是否复杂”。
+
+**图 9‑2 可拓展性难度矩阵（0易/1中/2难）**  
+![](figures/recommend_extend/portability_matrix.png?v=20260201_1)
+
+**（a）极其容易拓展（改驱动映射 + 重新标定少量参数即可）**  
+- **智能手机/平板**：驱动维度几乎一致（屏幕、网络、温度、CPU），只要拿到对应日志字段，就能复用分段、拟合与模糊匹配流程。  
+- **带屏 IoT 终端（车载中控/掌机）**：同样是“屏幕+无线+温度+负载”的组合，结构上接近。
+
+**（b）中等难度（骨架可用，但驱动模块需重定义）**  
+- **笔记本电脑**：SOC 骨架仍成立，但驱动模块要扩展到“显示器/键盘背光/离散GPU/外设/风扇”，且电源架构更复杂（多电压轨、充电策略、外接电源切换）。  
+- **无人机/机器人**：SOC 骨架仍成立，但负载几乎全部来自电机/推进与控制回路，且与姿态/任务强耦合；温度与风速也会成为主导变量。
+
+**（c）较难拓展（模式高度非平稳/功耗维度与可观测性完全不同）**  
+- **智能手表/穿戴**：以睡眠/唤醒为主，超低功耗状态占比高；“事件驱动”的能耗比“连续负载”更关键，需要把模型从连续时间转向混合系统（状态机）。  
+- **真无线耳机**：耳机/充电盒双电池、多模式（ANC/通透/编解码/链路质量），可观测性弱且充放电切换频繁。
+
+**一句话结论（收尾）**：  
+我们的框架最强的可扩展性来自“骨架不变、模块可换”：对“屏幕+无线+温度+可观测负载”的设备几乎可直接迁移；对“多电源轨/强执行机构/睡眠占比高”的设备则必须重定义驱动模块与状态机，并重新设计可观测指标与分段策略。

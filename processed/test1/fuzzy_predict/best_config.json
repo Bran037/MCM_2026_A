@@ -1,0 +1,11 @@
+{
+  "cpu_bins": 3,
+  "k_neighbors": 250,
+  "sigma": 1.0,
+  "n_eval_slices": 4,
+  "acc_time_mean": 0.7498751504209505,
+  "acc_time_median": 0.9522515977212852,
+  "acc_time_p10": 0.34601426162954174,
+  "acc_time_p90": 0.9918348813720916,
+  "acc_time_ge_0.90_frac": 0.75
+}

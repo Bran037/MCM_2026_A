@@ -1,0 +1,11 @@
+{
+  "n": 5133,
+  "DIFF_MIN": 15,
+  "HAC_LAG": 20,
+  "R2_base": 0.13412974340815675,
+  "RMSE_base": 0.4111211545844395,
+  "R2_netT": 0.13538844325645338,
+  "RMSE_netT": 0.4108222262346547,
+  "scipy_available": true,
+  "params_source": "C:/Regular/2026MCM/MCM_2026_A/processed/test1/episodes_fit/fit_params.csv"
+}

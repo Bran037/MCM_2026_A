@@ -1,0 +1,14 @@
+{
+  "alpha": 0.5,
+  "train_keys": "e0_i1,e0_i2,e1_i1,e1_i2,e2_i0,e2_i2",
+  "test_keys": "e0_i0,e1_i0,e2_i1",
+  "train_r2": 0.9739905373843363,
+  "train_rmse": 3.325123012731335,
+  "test_r2": 0.9939349506773708,
+  "test_rmse": 2.0775309216799913,
+  "fit_info": {
+    "method": "least_squares_refine",
+    "cost": 0.0035935016464758362,
+    "alpha": 0.5
+  }
+}

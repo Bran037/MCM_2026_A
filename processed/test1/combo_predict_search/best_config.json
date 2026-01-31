@@ -1,0 +1,6 @@
+{
+  "ok": false,
+  "reason": "no_config_meets_>=10_combos",
+  "max_eligible_combos_seen": 6,
+  "note": "Search is bounded and pruned; increase coverage by relaxing thresholds if needed."
+}

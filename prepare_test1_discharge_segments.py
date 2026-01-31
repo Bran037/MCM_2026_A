@@ -6,8 +6,9 @@ Key requirement (from your plots + fit stability):
   (e.g. +0.2%/min), so we need a sustained-rise detector, not only 1-min jumps.
 
 Goal for this script:
-- Output 9 segments total (3 figures × 3 segments), and each segment should contain
-  as much *condition variation* as possible (CPU/net/brightness/temp changes).
+- Output 9 segments total (3 figures × 3 segments), but prefer *big/continuous discharge*
+  segments (visually similar to the main dataset long-segment plots), while still trying
+  to maximize *condition variation* within each segment (CPU/net/brightness/temp changes).
 
 Outputs (legacy-compatible filenames):
   processed/test1/segments/test1_segments_1min.csv
@@ -33,7 +34,7 @@ TARGET_K = 9
 GROUP_SIZE = 3
 
 
-# 1) coarse segmentation: break on gaps, major artifacts, and charging hints
+# 1) discharge detector: break on gaps, artifacts, and charging hints
 GAP_BREAK_MIN = 15
 SOC_JUMP_ABS_PCT = 4.0  # big per-minute jumps are artifacts/resets
 
@@ -41,15 +42,15 @@ SOC_JUMP_ABS_PCT = 4.0  # big per-minute jumps are artifacts/resets
 CHARGE_LOOKAHEAD_MIN = 15
 CHARGE_RISE_PCT = 2.0  # if SOC rises by >=2% within next 15 minutes -> charging onset
 
-# 2) window candidates within discharge-only regions
-WIN_LEN_MIN = 180   # long window to include many condition changes (relaxed to ensure >=9 candidates)
-WIN_STEP_MIN = 60
+# Big-segment selection (preferred)
+BIG_MIN_LEN_MIN = 600        # >= 10 hours
+BIG_MIN_DROP_PCT = 12.0
+BIG_MAX_POS_JUMP_PCT = 1.0   # allow 1% bumps (quantization)
+BIG_MIN_MONO_RATIO = 0.70
 
-# 3) candidate constraints (keep "clean discharge" + enough signal)
-MIN_DROP_PCT = 6.0
-MIN_MONO_RATIO = 0.80
-MAX_POS_JUMP_PCT = 1.0  # allow 1% bumps from SOC quantization
-MAX_CHARGE_FLAG_RATIO = 0.02  # allow tiny contamination, but almost zero
+# If not enough "big" segments exist, split the longest discharge episodes into big chunks.
+BIG_SPLIT_TARGET_LEN = 900   # 15 hours per chunk (approx)
+BIG_SPLIT_MIN_LEN = 600      # don't create chunks shorter than 10 hours
 
 def _segment(df: pd.DataFrame) -> pd.DataFrame:
     df = df.sort_values("time").copy()
@@ -95,11 +96,134 @@ def _count_switches(x: np.ndarray) -> int:
     return int(np.sum(x[1:] != x[:-1]))
 
 
-def _window_summary(df: pd.DataFrame, w: Dict[str, object]) -> Dict[str, object]:
-    seg_id = int(w["seg_id"])
-    s = int(w["start_idx"])
-    e = int(w["end_idx"])
-    g = df[df["seg_id"] == seg_id].sort_values("time").reset_index(drop=True).iloc[s:e].copy()
+def _segment_stats(g: pd.DataFrame) -> Dict[str, float]:
+    """Compute discharge cleanliness + condition-variation features for one candidate segment."""
+    soc = pd.to_numeric(g["soc_pct"], errors="coerce").to_numpy(float)
+    ds = pd.to_numeric(g["dsoc_seg_pct"], errors="coerce").to_numpy(float)
+    net = pd.to_numeric(g["net_type_code"], errors="coerce").fillna(0).astype(int).to_numpy()
+    br = pd.to_numeric(g["brightness_state"], errors="coerce").to_numpy(float)
+    scr = (br >= 0).astype(int)
+    cpu = pd.to_numeric(g["cpu_load"], errors="coerce").to_numpy(float)
+    f = pd.to_numeric(g["cpu_freq_norm"], errors="coerce").to_numpy(float)
+    temp = pd.to_numeric(g["battery_temp_C"], errors="coerce").to_numpy(float)
+    plugged = pd.to_numeric(g["battery_plugged"], errors="coerce").fillna(0).to_numpy(float)
+
+    # charging flags inside segment (look-ahead, relative to segment local series)
+    soc_fwd = pd.Series(soc).shift(-CHARGE_LOOKAHEAD_MIN).to_numpy(float)
+    charge_flags = (soc_fwd - soc) >= CHARGE_RISE_PCT
+    charge_flag_ratio = float(np.nanmean(charge_flags)) if charge_flags.size else 1.0
+    plugged_ratio = float(np.nanmean(plugged > 0.5)) if plugged.size else 0.0
+
+    drop = float(soc[0] - soc[-1]) if soc.size else float("nan")
+    mono_ratio = float(np.nanmean(np.nan_to_num(ds, nan=0.0) <= 0.0)) if ds.size else 0.0
+    pos_jump_max = float(np.nanmax(np.clip(ds, 0, None))) if ds.size else 0.0
+    # avoid "full-battery plateau" segments: require some early/late drop
+    if soc.size:
+        k = int(min(120, soc.size - 1))  # first 2 hours
+        early_drop_120 = float(soc[0] - soc[k])
+        late_drop_120 = float(soc[max(0, soc.size - 1 - k)] - soc[-1])
+    else:
+        early_drop_120 = 0.0
+        late_drop_120 = 0.0
+    # flat ratio (SOC almost constant) — helps exclude long plateaus
+    flat_ratio = float(np.nanmean(np.abs(np.nan_to_num(ds, nan=0.0)) < 0.05)) if ds.size else 1.0
+
+    cpu_std = float(np.nanstd(cpu))
+    f_std = float(np.nanstd(f))
+    temp_range = float(np.nanmax(temp) - np.nanmin(temp)) if temp.size else 0.0
+
+    counts = np.bincount(net.clip(0, 2), minlength=3).astype(float)
+    probs = counts / max(1.0, float(counts.sum()))
+    net_entropy = _entropy_from_probs(probs)
+    net_switches = _count_switches(net)
+    scr_switches = _count_switches(scr)
+
+    br_on = np.where(br >= 0, br, np.nan)
+    br_std = float(np.nanstd(br_on))
+
+    # score: favor "big but diverse"
+    score = (
+        2.0 * net_entropy
+        + 0.01 * net_switches
+        + 0.01 * scr_switches
+        + 2.0 * cpu_std
+        + 0.6 * f_std
+        + 0.2 * (temp_range / 5.0)
+        + 0.8 * br_std
+        + 0.2 * (max(0.0, drop) / 10.0)
+    )
+
+    return {
+        "drop_pct": float(drop),
+        "early_drop_120": float(early_drop_120),
+        "late_drop_120": float(late_drop_120),
+        "flat_ratio": float(flat_ratio),
+        "mono_ratio": float(mono_ratio),
+        "pos_jump_max": float(pos_jump_max),
+        "charge_flag_ratio": float(charge_flag_ratio),
+        "plugged_ratio": float(plugged_ratio),
+        "cpu_std": float(cpu_std),
+        "f_std": float(f_std),
+        "temp_range": float(temp_range),
+        "net_entropy": float(net_entropy),
+        "net_switches": float(net_switches),
+        "scr_switches": float(scr_switches),
+        "br_std": float(br_std),
+        "score": float(score),
+    }
+
+
+def _big_segment_candidates(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Build big discharge candidates directly from coarse discharge episodes.
+    If big episodes are too few, split long episodes into big chunks.
+    """
+    df = df.sort_values(["seg_id", "time"]).copy()
+
+    # start from coarse discharge episodes (seg_id from _segment)
+    eps = []
+    for coarse_id, g0 in df.groupby("seg_id"):
+        g0 = g0.sort_values("time").reset_index(drop=True)
+        n = len(g0)
+        if n < BIG_MIN_LEN_MIN:
+            continue
+        # If very long, split into big chunks
+        if n >= 2 * BIG_SPLIT_MIN_LEN:
+            starts = list(range(0, n - BIG_SPLIT_MIN_LEN + 1, BIG_SPLIT_TARGET_LEN))
+            # ensure at least one window
+            if not starts:
+                starts = [0]
+            for s in starts:
+                e = min(n, s + BIG_SPLIT_TARGET_LEN)
+                if e - s < BIG_SPLIT_MIN_LEN:
+                    continue
+                gg = g0.iloc[s:e].copy()
+                st = _segment_stats(gg)
+                eps.append(
+                    {
+                        "coarse_seg_id": int(coarse_id),
+                        "start_idx": int(s),
+                        "end_idx": int(e - 1),
+                        "start_time": gg["time"].iloc[0],
+                        "end_time": gg["time"].iloc[-1],
+                        "n": int(len(gg)),
+                        **st,
+                    }
+                )
+        else:
+            st = _segment_stats(g0)
+            eps.append(
+                {
+                    "coarse_seg_id": int(coarse_id),
+                    "start_idx": 0,
+                    "end_idx": int(n - 1),
+                    "start_time": g0["time"].iloc[0],
+                    "end_time": g0["time"].iloc[-1],
+                    "n": int(n),
+                    **st,
+                }
+            )
+    return pd.DataFrame(eps)
 
     soc = pd.to_numeric(g["soc_pct"], errors="coerce").to_numpy(float)
     ds = pd.to_numeric(g["dsoc_seg_pct"], errors="coerce").to_numpy(float)
@@ -173,20 +297,6 @@ def _window_summary(df: pd.DataFrame, w: Dict[str, object]) -> Dict[str, object]
     }
 
 
-def _build_candidate_windows(df: pd.DataFrame) -> pd.DataFrame:
-    df = df.sort_values(["seg_id", "time"]).copy()
-    rows: List[Dict[str, object]] = []
-    for seg_id, g0 in df.groupby("seg_id"):
-        g = g0.sort_values("time").reset_index(drop=True)
-        n = len(g)
-        if n < WIN_LEN_MIN:
-            continue
-        for start in range(0, n - WIN_LEN_MIN + 1, WIN_STEP_MIN):
-            end = start + WIN_LEN_MIN
-            rows.append({"seg_id": int(seg_id), "start_idx": start, "end_idx": end})
-    return pd.DataFrame(rows)
-
-
 def _pick_best_nonoverlap(cands: pd.DataFrame, k: int) -> pd.DataFrame:
     cands = cands.sort_values(["score", "drop_pct", "n"], ascending=[False, False, False]).copy()
     chosen: List[Dict[str, object]] = []
@@ -212,15 +322,15 @@ def _pick_best_nonoverlap(cands: pd.DataFrame, k: int) -> pd.DataFrame:
     return out
 
 
-def _materialize_windows(df: pd.DataFrame, chosen: pd.DataFrame) -> pd.DataFrame:
+def _materialize_chosen(df: pd.DataFrame, chosen: pd.DataFrame) -> pd.DataFrame:
     parts = []
     for i, (_, w) in enumerate(chosen.iterrows()):
-        seg_id = int(w["seg_id"])
+        coarse_id = int(w["coarse_seg_id"])
         s = int(w["start_idx"])
         e = int(w["end_idx"]) + 1
-        g = df[df["seg_id"] == seg_id].sort_values("time").reset_index(drop=True).iloc[s:e].copy()
+        g = df[df["seg_id"] == coarse_id].sort_values("time").reset_index(drop=True).iloc[s:e].copy()
         # IMPORTANT: each chosen window becomes its own segment id (0..K-1)
-        g["orig_seg_id"] = int(seg_id)
+        g["orig_seg_id"] = int(coarse_id)
         g["win_start_idx"] = int(s)
         g["win_end_idx"] = int(e - 1)
         g["seg_id"] = int(i)
@@ -237,33 +347,55 @@ def main() -> None:
     df = df.dropna(subset=["time"])
     df = _segment(df)
 
-    # build candidate windows and score them
-    windows = _build_candidate_windows(df)
-    if windows.empty:
-        raise RuntimeError("No candidate windows generated; reduce WIN_LEN_MIN or check data.")
+    # build big discharge candidates and pick 9 non-overlapping segments
+    cand = _big_segment_candidates(df)
+    if cand.empty:
+        raise RuntimeError("No discharge candidates found; check segmentation thresholds.")
 
-    summaries = []
-    for _, w in windows.iterrows():
-        s = _window_summary(df, w.to_dict())
-        # constraints: clean discharge + enough drop
-        if s["drop_pct"] < MIN_DROP_PCT:
-            continue
-        if s["mono_ratio"] < MIN_MONO_RATIO:
-            continue
-        if s["pos_jump_max"] > MAX_POS_JUMP_PCT:
-            continue
-        if s["charge_flag_ratio"] > MAX_CHARGE_FLAG_RATIO:
-            continue
-        if s["plugged_ratio"] > 0.001:
-            continue
-        summaries.append(s)
+    def filt(
+        c: pd.DataFrame,
+        *,
+        min_len: int,
+        min_drop: float,
+        min_early: float,
+        min_late: float,
+        max_flat: float,
+    ) -> pd.DataFrame:
+        return c[
+            (c["n"] >= min_len)
+            & (c["drop_pct"] >= min_drop)
+            & (c["early_drop_120"] >= min_early)
+            & (c["late_drop_120"] >= min_late)
+            & (c["flat_ratio"] <= max_flat)
+            & (c["mono_ratio"] >= BIG_MIN_MONO_RATIO)
+            & (c["pos_jump_max"] <= BIG_MAX_POS_JUMP_PCT)
+            & (c["plugged_ratio"] <= 0.001)
+            & (c["charge_flag_ratio"] <= 0.02)
+        ].copy()
 
-    cand = pd.DataFrame(summaries)
-    if cand.empty or len(cand) < TARGET_K:
-        raise RuntimeError(f"Need {TARGET_K} discharge windows, got {len(cand)}. Try relaxing thresholds.")
+    # staged relaxation to ensure we can always pick 9 "big-ish" segments
+    stages = [
+        # strict: 10h+, avoid plateaus
+        dict(min_len=BIG_MIN_LEN_MIN, min_drop=BIG_MIN_DROP_PCT, min_early=1.0, min_late=1.0, max_flat=0.85),
+        # relax plateau a bit
+        dict(min_len=BIG_MIN_LEN_MIN, min_drop=BIG_MIN_DROP_PCT, min_early=0.8, min_late=0.8, max_flat=0.90),
+        # allow 8h+ segments
+        dict(min_len=480, min_drop=max(10.0, BIG_MIN_DROP_PCT * 0.7), min_early=0.8, min_late=0.8, max_flat=0.92),
+        # last resort: still big-ish, but keep purity constraints
+        dict(min_len=420, min_drop=max(8.0, BIG_MIN_DROP_PCT * 0.6), min_early=0.5, min_late=0.5, max_flat=0.95),
+    ]
 
-    chosen = _pick_best_nonoverlap(cand, k=TARGET_K)
-    chosen_points = _materialize_windows(df, chosen).copy()
+    cand_f = pd.DataFrame()
+    for st in stages:
+        cand_f = filt(cand, **st)
+        if len(cand_f) >= TARGET_K:
+            break
+
+    if len(cand_f) < TARGET_K:
+        raise RuntimeError(f"Need {TARGET_K} big discharge segments, got {len(cand_f)} after relaxation.")
+
+    chosen = _pick_best_nonoverlap(cand_f, k=TARGET_K)
+    chosen_points = _materialize_chosen(df, chosen).copy()
     # recompute dsoc for safety (now that seg_id is per-window)
     chosen_points["dsoc_seg_pct"] = chosen_points.groupby("seg_id")["soc_pct"].diff()
 

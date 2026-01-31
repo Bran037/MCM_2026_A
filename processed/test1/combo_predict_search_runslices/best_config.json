@@ -1,0 +1,14 @@
+{
+  "cpu_edges_pct": [
+    33,
+    66
+  ],
+  "bri_mode": "4",
+  "min_run_min": 1,
+  "min_test_total_min": 10,
+  "min_slices_per_combo": 1,
+  "lambda": 0.3,
+  "n_combos_evaluated": 10,
+  "acc_mean_over_combos": 0.6886059504898412,
+  "acc_min_over_combos": 0.0
+}

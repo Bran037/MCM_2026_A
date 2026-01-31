@@ -1,0 +1,10 @@
+{
+  "n": 2524,
+  "DIFF_MIN": 5,
+  "HAC_LAG": 20,
+  "R2_in_sample_main": 0.004173896160852175,
+  "RMSE_in_sample_main": 0.552158308965049,
+  "R2_in_sample_interactions": 0.008347193228311456,
+  "RMSE_in_sample_interactions": 0.5510001047639642,
+  "scipy_available": true
+}

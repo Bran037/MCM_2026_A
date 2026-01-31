@@ -101,15 +101,12 @@ def _model_predict_segment(df: pd.DataFrame, p: np.ndarray, t_ref: float = 30.0)
 
 
 def _objective(all_segments: List[pd.DataFrame], p: np.ndarray) -> np.ndarray:
-    # residuals stacked (equal weight per segment)
+    # residuals stacked (weight by number of points; better for "big segment" fits)
     res = []
     for seg in all_segments:
         y = seg["soc"].to_numpy(float)
         yhat = _model_predict_segment(seg, p)
-        r = y - yhat
-        # normalize so long segments do not dominate the fit
-        w = 1.0 / np.sqrt(max(1.0, float(np.isfinite(r).sum())))
-        res.append(r * w)
+        res.append(y - yhat)
     return np.concatenate(res)
 
 
@@ -144,10 +141,10 @@ def _fit_shared_params(all_segments: List[pd.DataFrame]) -> Tuple[np.ndarray, Di
         best_cost = np.inf
         # multi-start improves chances for high R^2
         rng = np.random.default_rng(7)
-        for _ in range(10):
+        for _ in range(16):
             jitter = rng.normal(scale=[2e-6, 20, 200, 0.4, 0.4, 0.4, 0.2, 0.2, 0.02], size=p0.shape)
             x0 = np.clip(p0 + jitter, lb, ub)
-            sol = least_squares(fun, x0, bounds=(lb, ub), loss="soft_l1", f_scale=0.01, max_nfev=2000)
+            sol = least_squares(fun, x0, bounds=(lb, ub), loss="soft_l1", f_scale=0.01, max_nfev=3500)
             if sol.cost < best_cost:
                 best_cost = float(sol.cost)
                 best = sol.x

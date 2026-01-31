@@ -1,0 +1,10 @@
+{
+  "min_run_min": 5,
+  "target_n": 6,
+  "min_total_min": 30,
+  "lambda": 10.0,
+  "use_pairwise": true,
+  "n_combos": 6,
+  "acc_mean": 0.6773185661632405,
+  "acc_min": 0.6102611908503535
+}
