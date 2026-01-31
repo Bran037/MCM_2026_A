@@ -48,6 +48,14 @@
 | \(b(t)\) | 屏幕亮度（归一化） | \([0,1]\) | 建模变量；数据验证阶段可视为常数 \(b(t)\equiv b_0\) |
 | \(u_{\\text{chg}}(t)\) | 充电指示变量 | \(\{0,1\}\) | 日志列 `is_charging`（True/False） |
 | \(u_{\\text{net}}(t)\) | 网络模式 | {wi‑fi, mobile, none, …} | 日志列 `network_type` |
+| \(u_{\\text{cpu}}(t)\) | CPU 负载率（归一化利用率） | \([0,1]\) | 作为建模变量；在 `test_1` 可由 `Total_CPU` 等字段构造 |
+| \(f_{\\text{cpu}}(t)\) | CPU 等效频率（归一化） | \([0,1]\) | 作为建模变量；在 `test_1` 可由 `CpuHertz`/多核频点字段构造 |
+| \(P_{\\text{cpu}}(t)\) | CPU 功耗 | mW | 由 CMOS 功耗模型给出；也可通过电流/电压换算得到 |
+| \(I_{\\text{cpu}}(t)\) | CPU 导致的等效放电电流增量 | mA | \(I_{\\text{cpu}}(t)=P_{\\text{cpu}}(t)/V(t)\)（用电池端电压近似） |
+| \(I_{\\text{idle}}\) | 待机/低负载下的基线放电强度 | mA | 待估参数（吸收系统维持与漏电等） |
+| \(\alpha_{\\text{cpu}}\) | CPU 负载‑频率到等效电流的比例系数 | mA | 待估参数（见 3.1.1） |
+| \(\beta\) | DVFS 下电压‑频率幂指数（\(V_{dd}\propto f^{\\beta}\)） | \(\mathbb{R}_+\) | 机理参数（用于推导） |
+| \(\gamma\) | 频率缩放指数（\(I_{cpu}\propto u_{cpu}f^{\\gamma}\)） | \(\gamma\ge 1\) | \(\gamma=1+2\\beta\)，可估/可验证 |
 | \(a(t)\) | 前台应用（或活动标识） | 字符串 | 日志列 `foreground_app`（用于行为分段/负载代理） |
 | \(\Delta t_k\) | 相邻采样时间间隔 | s | 由时间戳差分得到（采样近似 1–2 s） |
 | \(\tau_{\\text{empty}}\) | 距离耗尽时间（time‑to‑empty） | s 或 h | 由模型预测得到 |
@@ -111,6 +119,68 @@ SOC_0=\int_{t_0}^{t_0+\tau_{\\text{empty}}}\frac{\eta\, I_{\\text{d}}(t)}{C_{\\t
 
 以上给出了我们后续所有扩展模型（加入充电、温度、模式切换、老化等项）的“最小骨架”：任何复杂项都应以不违背该守恒结构为前提进行修正。
 
+#### 3.1.1 基线放电强度的显式化：CPU 负载驱动的 \(I_0(t)\)
+
+引理 1 只给出了 SOC 的守恒骨架，但要让模型具备现实解释力与可预测性，还需要进一步回答：在真实手机里，净放电电流 \(I_{\text{d}}(t)\) 从何而来、主要由哪些可观测因素驱动？
+
+从能量守恒角度，电池在纯放电时对外供能的瞬时功率近似满足
+\[
+P_{\text{batt}}(t)\approx V(t)\,I_{\text{d}}(t),
+\]
+其中 \(V(t)\) 为电池端电压。于是“电流建模”与“功率建模”可以互相转换：
+\[
+I_{\text{d}}(t)\approx \frac{P_{\text{batt}}(t)}{V(t)}.
+\]
+因此，只要我们能够对手机关键部件的功耗做可解释分解，就能得到 \(I_{\text{d}}(t)\) 的可观测驱动形式，并代回引理 1 得到更具解释力的 SOC 方程。
+
+在移动端系统中，功耗常被写作“基础功耗 + 若干子系统增量功耗”的分解形式（例如 CPU/屏幕/网络/传感器等），其中计算子系统（CPU/SoC）是最重要、最不稳定、也最容易造成“同一设备不同时间段耗电差异”的来源之一 [3,4]。因此，我们将“基线放电强度”显式写为
+\[
+I_0(t)=I_{\text{idle}}+I_{\text{cpu}}(t),
+\]
+其中 \(I_{\text{idle}}\) 表示低负载/待机态下仍然存在的基础放电（系统维持 + 漏电等），而 \(I_{\text{cpu}}(t)\) 则刻画 CPU 负载带来的主要增量。
+
+接下来给出 \(I_{\text{cpu}}(t)\) 的一个标准推导链条。CMOS 处理器功耗通常分解为静态/漏电功耗与动态开关功耗两部分 [1]：
+\[
+P_{\text{cpu}}(t)=P_{\text{leak}}(t)+P_{\text{dyn}}(t).
+\]
+其中动态开关功耗的经典形式为 [1,2]
+\[
+P_{\text{dyn}}(t)=\alpha(t)\,C_{\text{eff}}\,V_{\text{dd}}(t)^2\,f_{\text{cpu,abs}}(t),
+\]
+这里 \(C_{\text{eff}}\) 为等效开关电容，\(V_{\text{dd}}(t)\) 为内核供电电压，\(f_{\text{cpu,abs}}(t)\) 为绝对频率，\(\alpha(t)\) 为活动因子。对“手机整机耗电”建模时，\(\alpha(t)\) 常用 CPU 利用率（负载率）\(u_{\text{cpu}}(t)\in[0,1]\) 作为可观测代理，即 \(\alpha(t)\propto u_{\text{cpu}}(t)\)（本质上是“活跃时间占比”对功耗的线性缩放）[3,4]。
+
+现代移动 SoC 普遍采用 DVFS（动态电压频率调节）：当负载上升时，系统会提升 CPU 频率并同步提升供电电压以保证时序裕量 [2]。在一个工作区间内，可用幂函数近似电压‑频率关系：
+\[
+V_{\text{dd}}(t)\propto f_{\text{cpu,abs}}(t)^{\beta}\qquad (\beta>0).
+\]
+将其代入 \(P_{\text{dyn}}\) 得到
+\[
+P_{\text{dyn}}(t)\propto u_{\text{cpu}}(t)\, f_{\text{cpu,abs}}(t)^{1+2\beta}.
+\]
+为便于估计，我们把常数合并，令 \(\gamma:=1+2\beta\ge 1\)，并把频率归一化为 \(f_{\text{cpu}}(t)\in[0,1]\)（例如除以设备最大频点）。再用电池端电压近似把功率换算为等效电流增量：
+\[
+I_{\text{cpu}}(t)\approx \frac{P_{\text{cpu}}(t)}{V(t)}
+\approx
+\alpha_{\text{cpu}}\,u_{\text{cpu}}(t)\,f_{\text{cpu}}(t)^{\gamma},
+\qquad (\alpha_{\text{cpu}}>0,\ \gamma\ge 1).
+\]
+于是得到一个可直接由 `test_1` 数据验证与拟合的“CPU 驱动基线项”：
+\[
+\boxed{
+I_0(t)=I_{\text{idle}}+\alpha_{\text{cpu}}\,u_{\text{cpu}}(t)\,f_{\text{cpu}}(t)^{\gamma}.
+}
+\]
+
+该表达式的重要意义在于：在主数据集中（缺少 CPU 负载/频点观测时），\(u_{\text{cpu}}(t)\) 与 \(f_{\text{cpu}}(t)\) 等价于“潜变量”，只能被吸收到 \(I_0(t)\) 的时变项中；而在 `test_1` 中它们可观测，从而可把“最大份额的未解释基线波动”显式化，进而提升模型解释力并为后续“场景→负载→续航预测”的映射提供支撑。
+
+> 注：若仅能获得 CPU 负载率而无法获得频率，可取 \(f_{\text{cpu}}(t)\equiv 1\)，方程退化为 \(I_0(t)=I_{\text{idle}}+\tilde{\alpha}_{\text{cpu}}u_{\text{cpu}}(t)\)；或在高负载区域引入分段/二次项以刻画非线性。
+
+**（本节引用）**  
+[1] Rabaey, J. M., Chandrakasan, A. P., & Nikolić, B. *Digital Integrated Circuits: A Design Perspective*.（CMOS 动态功耗 \(P_{\text{dyn}}\propto \alpha C V^2 f\) 的经典来源）  
+[2] Hennessy, J. L., & Patterson, D. A. *Computer Architecture: A Quantitative Approach*.（DVFS 与功耗‑频率‑电压关系的体系结构视角）  
+[3] Zhang, L., Tiwana, B., Qian, Z., Wang, Z., Dick, R. P., Mao, Z. M., & Yang, L. “Accurate Online Power Estimation and Automatic Battery Behavior Based Power Model Generation for Smartphones.”（移动端在线功耗建模/组件分解思想；PowerTutor 系列工作）  
+[4] Pathak, A., Hu, Y. C., & Zhang, M. “Fine-Grained Power Modeling for Smartphones Using System Call Tracing.”（Eprof 系列工作：细粒度能耗归因、以可观测系统行为作为功耗代理变量）
+
 #### 3.2 “装饰项”一：亮屏、网络与温度修正（不考虑充电）
 
 本节在不考虑充电过程的前提下，将“纯放电骨架”推广到可直接由数据验证的修正形式。记 \(u_{\text{scr}}(t)\in\{0,1\}\) 为亮屏指示变量（1=亮屏），记 \(u_{\text{net}}(t)\in\{\text{none},\text{wi-fi},\text{mobile}\}\) 为网络模式。记温度为 \(T(t)\)（℃），并取参考温度 \(T_{\text{ref}}\)（例如 30℃）。在本节中，我们将净放电电流 \(I_{\text{d}}(t)\) 以“放电强度”代理量表示为分段常值/分段线性的等效放电项，从而可在不显式使用充电信息的情况下拟合系数。
@@ -140,7 +210,34 @@ r(t)\equiv-\dot{SOC}(t)=\frac{\eta}{C_{\text{eff}}}I_0(t)\left[1+\frac{I_{\text{
 \dot{SOC}(t)= -\frac{\eta}{C_{\text{eff}}}\, I_0(t)\cdot k_{\text{scr}}\!\big(u_{\text{scr}}(t),b(t)\big)\cdot k_{\text{net}}\!\big(u_{\text{net}}(t)\big)\cdot k_T\!\big(T(t)\big),
 \]
 
-其中 \(I_0(t)\ge 0\) 为“基准放电强度”（可理解为在参考工况下的等效放电电流），三类装饰项分别定义如下。
+其中 \(I_0(t)\ge 0\) 为“基准放电强度”（可理解为在参考工况下的等效放电电流）。在本报告的增强版机理模型中，\(I_0(t)\) 由第 3.1.1 节给出显式形式：
+\[
+I_0(t)=I_{\text{idle}}+\alpha_{\text{cpu}}\,u_{\text{cpu}}(t)\,f_{\text{cpu}}(t)^{\gamma},
+\]
+从而得到“加入全部影响项后的 SOC 连续时间模型”（不考虑充电）：
+\[
+\boxed{
+\dot{SOC}(t)= -\frac{\eta}{C_{\text{eff}}}\,\Big[I_{\text{idle}}+\alpha_{\text{cpu}}\,u_{\text{cpu}}(t)\,f_{\text{cpu}}(t)^{\gamma}\Big]\cdot
+k_{\text{scr}}\!\big(u_{\text{scr}}(t),b(t)\big)\cdot k_{\text{net}}\!\big(u_{\text{net}}(t)\big)\cdot k_T\!\big(T(t)\big).
+}
+\]
+
+**先写 SOC 方程、再“反推回归口径”（标准估计口径）**  
+为进行参数估计，我们将上式写成放电率 \(r(t)\equiv-\dot{SOC}(t)>0\) 的形式：
+\[
+r(t)=\frac{\eta}{C_{\text{eff}}}\,\Big[I_{\text{idle}}+\alpha_{\text{cpu}}\,u_{\text{cpu}}(t)\,f_{\text{cpu}}(t)^{\gamma}\Big]\cdot
+k_{\text{scr}}\cdot k_{\text{net}}\cdot k_T.
+\]
+对数化得到
+\[
+\log r(t)=\log\!\Big(\frac{\eta}{C_{\text{eff}}}\Big)+
+\log\!\Big(I_{\text{idle}}+\alpha_{\text{cpu}}\,u_{\text{cpu}}(t)\,f_{\text{cpu}}(t)^{\gamma}\Big)
+\,+\log k_{\text{scr}}+\log k_{\text{net}}+\log k_T.
+\]
+这一定义了我们在 `test_1` 上的“增强版回归/拟合口径”：CPU 项进入的是 \(\log(\cdot)\) 的非线性项，因此可用（i）非线性最小二乘/最大似然直接估计 \((I_{\text{idle}},\alpha_{\text{cpu}},\gamma)\)，或（ii）在一定近似下将其线性化（例如将 \(\log(I_{\text{idle}}+\alpha_{\text{cpu}}x)\) 近似为 \(\tilde{\beta}_0+\tilde{\beta}_1\log x\) 并在高负载区间内拟合）。  
+反之，在主数据集中 \(u_{\text{cpu}},f_{\text{cpu}}\) 不可观测时，上述 CPU 项只能被吸收到 \(I_0(t)\) 的时变项中，因此第 4 章的 \(\log r\) 面板回归采用“无 CPU 的降阶口径”，并将未观测负载主要归入残差（第 4.8.6 的解释）。
+
+三类装饰项分别定义如下。
 
 需要强调的是：乘性形式并不意味着“因素数越多就指数级爆炸”。若各因素的相对影响都是“小偏离”（例如 \(k_i=1+\epsilon_i\)，且 \(|\epsilon_i|\ll 1\)），则
 
@@ -809,6 +906,125 @@ T0=T-30.
 ![](figures/diagnostics/residual_acf.png)  
 理由：直接观察自相关结构，为 HAC 滞后阶选择（此处 20min）提供经验依据。
 
+#### 4.10 补充数据集 `test_1`：可观测 CPU/频率的“高条件变换放电段”共享参数拟合验证
+
+主数据集（`MCM_2026_A/Database/`）的优势是“覆盖多设备、多天真实行为”，但其弱点是缺少对关键未观测负载（尤其 CPU 利用率与频率）的直接记录，因此第 3.1.1 节的 \(u_{\text{cpu}}(t),f_{\text{cpu}}(t)\) 在主数据集中只能作为潜变量被吸收进 \(I_0(t)\) 的时变项/残差中。为补足这一缺口，我们引入额外数据集 `MCM_2026_A/Database/test_1/`（下称 **`test_1`**），其提供了 CPU 负载、CPU 频率、亮屏/亮度、网络类型等观测，从而可用于：
+
+- **机理验证**：直接检验第 3.1.1 节 “CPU 驱动基线项” 是否能在共享参数约束下解释 SOC 下降。  
+- **可迁移性压力测试**：在“条件频繁变化”的纯放电窗口中进行共享参数拟合，避免“每段单独调参”的虚高拟合。  
+
+需要强调：`test_1` 是**补充数据集**，用于增强机理可解释性与额外验证；主报告的结论与统计检验仍以主数据集为核心证据（第 4–5 章）。
+
+##### 4.10.1 `test_1` 的统一分钟面板（`prepare_test1_panel.py` + `make_plots_test1.py`）
+
+我们将 `test_1` 的多表日志（`T0–T4.csv`、`ScreenOn.csv` 等）对齐到统一的分钟网格，输出 1-min 面板（脚本：`MCM_2026_A/prepare_test1_panel.py`）：
+
+- 输出面板：`MCM_2026_A/processed/test1/test1_panel_1min.csv`  
+- 面板摘要：`MCM_2026_A/processed/test1/test1_panel_summary.json`  
+- 质检图：`MCM_2026_A/processed/test1/figures/test1_overview.png`（脚本：`MCM_2026_A/make_plots_test1.py`）
+
+面板覆盖区间与缺失率摘要（来源：`test1_panel_summary.json`）：
+
+| item | value |
+| --- | --- |
+| user_id | 97bb95f55a |
+| start | 2016-05-09 11:26:00 |
+| end | 2016-05-19 01:21:00 |
+| n_minutes | 13796 |
+| brightness_normalization | divisor=255, max=255 |
+| missing_rate (core drivers) | `battery_level_pct/cpu_load/cpu_freq_norm/screen_on/brightness_state/net_type_code` 均为 0 |
+
+##### 4.10.2 `test_1` 的纯放电窗口挑选：3×3（9 段）且“段内条件变换尽可能多”
+
+`test_1` 的关键难点是：**充电不一定以“每分钟 +1%”的方式跳变**，可能出现连续数十分钟缓慢上升（例如 +0.2%/min）。若只用“单步上跳阈值”切段，会把充电段混入放电段，导致共享拟合出现“图形难看/明显偏离”（我们此前失败图的根因）。
+
+因此我们重写 `test_1` 的切段逻辑（脚本：`MCM_2026_A/prepare_test1_discharge_segments.py`），采用如下策略：
+
+- **粗切段（排除断档/重置/插电）**：对 `dt_min>15min`、`|ΔSOC|≥4%/min`、`battery_plugged>0` 等位置断开；
+- **持续充电检测（look-ahead）**：若未来 15 分钟内 \(SOC\) 累计上升 ≥2%，则判为充电起点并断开（用于捕获“缓慢充电”）；
+- **滑窗候选（窗口长度固定 180min）**：在粗段内以 60min 步长滑动生成候选窗口；
+- **纯放电约束**：候选窗口需满足
+  - 净下降 `drop_pct ≥ 6`；
+  - 单调性比例 `mono_ratio ≥ 0.80`；
+  - 段内正向跳变 `max(ΔSOC_+) ≤ 1%`（允许电量显示量化抖动）；
+  - `charge_flag_ratio`（look-ahead 充电标记占比）与 `plugged_ratio` 接近 0（避免混入充电）；
+- **“条件变换最大化”的评分挑选**：对候选窗口计算条件变换得分（网络熵/网络切换次数、亮屏切换次数、CPU/频率波动、温度范围、亮度波动等），并在“时间上尽量不重叠”的约束下挑选 9 段（3×3）。
+
+输出产物（固定路径）：
+
+- `MCM_2026_A/processed/test1/segments/test1_segments_1min.csv`  
+- `MCM_2026_A/processed/test1/segments/test1_segments_summary.csv`  
+- `MCM_2026_A/processed/test1/segments/test1_segments_chosen16.csv`（兼容文件名；内容同 summary）
+
+本次挑选的 9 个窗口段落摘要（来源：`processed/test1/segments/test1_segments_summary.csv`）：
+
+| seg_id | start_time | end_time | minutes | soc_start | soc_end | drop_pct |
+| --- | --- | --- | ---: | ---: | ---: | ---: |
+| 7 | 2016-05-10 07:34 | 2016-05-10 10:33 | 180 | 92.0 | 81.0 | 11.0 |
+| 2 | 2016-05-10 17:34 | 2016-05-10 20:33 | 180 | 44.0 | 21.0 | 23.0 |
+| 3 | 2016-05-11 17:44 | 2016-05-11 20:43 | 180 | 68.0 | 53.0 | 15.0 |
+| 0 | 2016-05-12 17:31 | 2016-05-12 20:30 | 180 | 61.0 | 47.0 | 14.0 |
+| 1 | 2016-05-13 04:47 | 2016-05-13 07:46 | 180 | 99.0 | 83.0 | 16.0 |
+| 5 | 2016-05-14 16:44 | 2016-05-14 19:43 | 180 | 100.0 | 87.0 | 13.0 |
+| 4 | 2016-05-16 06:23 | 2016-05-16 09:22 | 180 | 92.0 | 80.0 | 12.0 |
+| 8 | 2016-05-16 15:23 | 2016-05-16 18:22 | 180 | 53.0 | 40.0 | 13.0 |
+| 6 | 2016-05-18 04:27 | 2016-05-18 07:26 | 180 | 98.0 | 84.0 | 14.0 |
+
+##### 4.10.3 `test_1` 的共享参数 SOC 轨迹拟合：3 张图统一参数，且每图 \(R^2\ge 0.95\)
+
+我们在 `test_1` 上使用与第 3 章一致的连续时间放电骨架，并将其在 1-min 网格上离散化（脚本：`MCM_2026_A/fit_test1_16segments_shared_params.py`，此处配置为 3×3=9 段）：
+
+\[
+SOC_{k+1}=SOC_k - k_0\, I_{\text{eff}}(t_k)\,\Delta t_k,
+\]
+
+其中
+\[
+I_{\text{eff}}=
+\Big(I_{\text{idle}}+\alpha_{\text{cpu}}u_{\text{cpu}}(t)\,f_{\text{cpu}}(t)^{\gamma}\Big)\cdot k_{\text{scr}}\cdot k_{\text{net}}\cdot k_T,
+\]
+\[
+k_T=\exp(\beta_T(T-30)),\quad
+k_{\text{net}}=\begin{cases}
+1,&\text{none}\\
+\alpha_{\text{mob}},&\text{mobile}\\
+\alpha_{\text{wifi}},&\text{wi-fi}
+\end{cases},
+\quad
+k_{\text{scr}}=\begin{cases}
+1,&\text{screen off}\\
+1+\delta_{\text{scr}}+\beta_{\text{scr}}b,&\text{screen on}
+\end{cases}.
+\]
+
+拟合输出（固定路径）：
+
+- 参数表：`MCM_2026_A/processed/test1/fit12/fit_params.csv`  
+- 组内 \(R^2\)：`MCM_2026_A/processed/test1/fit12/r2_by_group.csv`  
+- 三张验收图：  
+  `processed/test1/fit12/figures/group_1_soc_fit.png`  
+  `processed/test1/fit12/figures/group_2_soc_fit.png`  
+  `processed/test1/fit12/figures/group_3_soc_fit.png`
+
+**表 4‑12 `test_1`：3×3 共享参数拟合结果（写死）**（来源：`processed/test1/fit12/r2_by_group.csv`）
+
+| group | n_segments | R2_soc_concat | RMSE_soc_pct |
+| --- | ---: | ---: | ---: |
+| 1 | 3 | 0.990 | 2.221 |
+| 2 | 3 | 0.992 | 1.766 |
+| 3 | 3 | 0.995 | 1.343 |
+
+**图 4‑26 至图 4‑28 `test_1`：3×3 段落共享参数拟合验收图（新增补充证据）**
+
+![](processed/test1/fit12/figures/group_1_soc_fit.png)  
+![](processed/test1/fit12/figures/group_2_soc_fit.png)  
+![](processed/test1/fit12/figures/group_3_soc_fit.png)  
+
+**这一组补充验证的理由**：  
+（i）在 CPU/频率可观测、且段内条件频繁切换的窗口上，模型在共享参数约束下仍达到 \(R^2\ge 0.95\)，强化了第 3.1.1 节“CPU 驱动基线项”的可解释性；  
+（ii）同时，切段规则对“缓慢充电混入放电段”的鲁棒性被显式检验并修复，避免了此前出现的“曲线明显不合理/拟合崩坏”的失败情形；  
+（iii）由于 `test_1` 为单用户短窗补充集，它不替代主数据集的统计结论，但可作为机理层面的额外证据与参数先验参考。
+
 ### 5 显著性检验与独立性检验：结论、解释与模型反思
 
 本章在“速率口径 \(\log r\)”上完成严格的显著性检验与独立性检验，并将检验结果反馈到模型结构选择：哪些装饰项应保留为主效应、哪些交互项必须引入、以及哪些复杂项在本数据尺度下“误差影响过小/不值得引入”。
@@ -925,6 +1141,12 @@ H_0:\beta_{\text{scr}\times\text{wifi}}=\beta_{\text{scr}\times\text{mob}}=\beta
 \dot{SOC}(t)= -\frac{\eta}{C_{\text{eff}}}\,I_0(t)\cdot
 k_{\text{scr}}\cdot k_{\text{net}}\cdot k_T\cdot k_{\text{int}}(u_{\text{scr}},u_{\text{net}},T),
 \]
+
+其中基线项在“增强机理模型”中可进一步显式写为（第 3.1.1）：
+\[
+I_0(t)=I_{\text{idle}}+\alpha_{\text{cpu}}\,u_{\text{cpu}}(t)\,f_{\text{cpu}}(t)^{\gamma}.
+\]
+对主数据集而言，由于缺少 \(u_{\text{cpu}}(t),f_{\text{cpu}}(t)\) 的直接观测，我们在统计检验中继续使用抽象的 \(I_0(t)\)（等价于把 CPU/后台负载吸收到“基线 + 段落/设备固定效应 + 残差”中）；而对 `test_1` 而言，上式可被直接带入并进行参数估计，从而显著提升机理解释力与可预测性。
 
 其中交互修正项取（仅蜂窝相关交互）：
 \[

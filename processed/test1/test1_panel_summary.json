@@ -1,0 +1,24 @@
+{
+  "user_id": "97bb95f55a",
+  "start": "2016-05-09 11:26:00",
+  "end": "2016-05-19 01:21:00",
+  "n_minutes": 13796,
+  "missing_rate": {
+    "UserID": 0.0,
+    "battery_level_pct": 0.0,
+    "battery_temp_C": 0.0,
+    "cpu_load": 0.0,
+    "cpu_freq_norm": 0.0,
+    "screen_on": 0.0,
+    "brightness_state": 0.0,
+    "net_type": 0.0,
+    "net_type_code": 0.0,
+    "brightness_mode": 0.0,
+    "wifi_connected": 0.011742534067845752,
+    "telephony_net_type_code": 0.0
+  },
+  "brightness_meta": {
+    "brightness_divisor": 255.0,
+    "brightness_max": 255.0
+  }
+}
